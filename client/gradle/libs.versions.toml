@@ -1,0 +1,13 @@
+[versions]
+kotlin = "2.3.21"
+agp = "9.2.0"
+compileSdk = "36"
+minSdk = "26"
+targetSdk = "36"
+
+[libraries]
+
+[plugins]
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+androidApplication = { id = "com.android.application", version.ref = "agp" }
+androidKmpLibrary = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }

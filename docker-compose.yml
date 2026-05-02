@@ -1,0 +1,92 @@
+# Khord PoC deployment.
+#
+# Per ADR 002 (Split-Trust) and ADR 019 (Deployment), the Key Server pair and
+# the Relay Server pair share zero state and have no communication channel.
+# This compose file enforces that at the network level: each pair sits on its
+# own Docker network with `internal: true` on the database networks so the
+# database is unreachable from the host or any other container.
+
+services:
+  keyserver-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: keyserver
+      POSTGRES_PASSWORD: keyserver_dev_password
+      POSTGRES_DB: keyserver
+    volumes:
+      - keyserver_db_data:/var/lib/postgresql/data
+    networks:
+      - keyserver_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keyserver -d keyserver"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  keyserver:
+    build:
+      context: ./servers/keyserver
+    environment:
+      DATABASE_URL: postgresql+asyncpg://keyserver:keyserver_dev_password@keyserver-db:5432/keyserver
+    depends_on:
+      keyserver-db:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    networks:
+      - keyserver_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  relayserver-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: relayserver
+      POSTGRES_PASSWORD: relayserver_dev_password
+      POSTGRES_DB: relayserver
+    volumes:
+      - relayserver_db_data:/var/lib/postgresql/data
+    networks:
+      - relayserver_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relayserver -d relayserver"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  relayserver:
+    build:
+      context: ./servers/relayserver
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relayserver:relayserver_dev_password@relayserver-db:5432/relayserver
+    depends_on:
+      relayserver-db:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+    networks:
+      - relayserver_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+# Two completely separate networks. The keyserver and relayserver containers
+# cannot resolve or reach each other's databases — by design.
+networks:
+  keyserver_net:
+    driver: bridge
+  relayserver_net:
+    driver: bridge
+
+volumes:
+  keyserver_db_data:
+  relayserver_db_data:
