@@ -76,8 +76,10 @@ raw_seed = Argon2id(seed_phrase_bytes, salt,
                      opslimit=MODERATE, memlimit=MODERATE)
 identity_signing_key = Ed25519 keypair from raw_seed (crypto_sign_seed_keypair)
 identity_agreement_key = X25519 keypair converted from Ed25519 keypair
-fingerprint = SHA-256(identity_public_signing_key)[0:32] (hex-encoded)
+fingerprint = hex(SHA-256(identity_public_signing_key))
 ```
+
+The fingerprint is the full 32-byte SHA-256 digest, hex-encoded as a 64-character lowercase string. **No truncation.**
 
 **Note:** The exact Argon2id parameters (opslimit, memlimit) must be documented and fixed across all client implementations. Any change produces a different key from the same seed.
 
@@ -166,13 +168,30 @@ POST /v1/auth/verify
 {
   "fingerprint": "<fingerprint>",
   "challenge": "<base64 challenge>",
-  "signature": "<base64 Ed25519 signature over challenge>"
+  "signature": "<base64 Ed25519 signature over challenge>",
+  "identity_key": "<base64 Ed25519 public key>"   // optional, see below
 }
 Response: { "token": "<short-lived session token>" }
 
 Step 3: Client uses session token for subsequent requests
 Authorization: Bearer <session_token>
 ```
+
+**`identity_key` field (Step 2).** This field exists to resolve the
+chicken-and-egg of first-time registration (ADR 020 step 9): the very first
+bundle upload requires an authenticated session, but the server has no
+identity key stored yet for that fingerprint.
+
+- **First-time auth** (no `identity_keys` row exists for `fingerprint`): the
+  field is **REQUIRED**. Server validates `hex(SHA-256(identity_key)) ==
+  fingerprint`, then verifies the signature against the provided key.
+- **Subsequent auth** (row exists): the field is **IGNORED** — the server
+  uses the stored key. As defense-in-depth, if the field is provided and
+  does *not* match the stored key, the verify call is rejected.
+
+All authentication failures return `401` with no detail beyond `"auth
+failed"` — the server does not distinguish missing-row, expired-challenge,
+reused-challenge, or bad-signature to the client.
 
 ### 4.5 Check Pre-Key Count
 

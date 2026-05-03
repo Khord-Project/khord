@@ -29,6 +29,8 @@ services:
       context: ./servers/keyserver
     environment:
       DATABASE_URL: postgresql+asyncpg://keyserver:keyserver_dev_password@keyserver-db:5432/keyserver
+      # SECURITY: Change this in production. Development-only secret.
+      KEY_SERVER_TOKEN_SECRET: "dev-only-change-me-in-production-deadbeef1234567890"
     depends_on:
       keyserver-db:
         condition: service_healthy
