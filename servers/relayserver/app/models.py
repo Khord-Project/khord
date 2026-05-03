@@ -24,6 +24,10 @@ class Mailbox(Base):
     proof_of_work_verified: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    # Monotonic per-mailbox sequence counter (ADR 007). Never resets.
+    last_sequence: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

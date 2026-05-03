@@ -214,16 +214,33 @@ Base URL: `https://<relayserver>/v1/`
 POST /v1/mailboxes
 Body:
 {
-  "mailbox_id": "<client-generated random ID>",
-  "proof_of_work": "<proof of work solution>"
+  "mailbox_id": "<client-generated random ID, ≥22 base64url chars>",
+  "proof_of_work": "<decimal-ASCII nonce solving the §5.6 puzzle>"
 }
 
 Response: 201 Created
 {
   "mailbox_id": "<mailbox_id>",
-  "bearer_token": "<random access token>"
+  "bearer_token": "<base64url-encoded 32-random-bytes, no padding>"
 }
 ```
+
+**`mailbox_id` constraints.** The string must be at least 22 base64url
+characters long (the minimum is also published by `GET /v1/pow-params`).
+Clients SHOULD generate it as `base64url(random_16_bytes)` with padding
+stripped — this gives 22 characters and ~128 bits of entropy, which is
+both unguessable and large enough that the proof-of-work cannot be cheaply
+grinded against short IDs. The server stores `mailbox_id` exactly as
+received; it is opaque to the server.
+
+**`bearer_token` encoding.** The server returns 32 random bytes, encoded as
+URL-safe base64 with the trailing `=` padding stripped (43 characters). The
+client uses the string verbatim in `Authorization: Bearer <token>` for
+subsequent requests. The server stores only `sha256(token_bytes)` — the
+plaintext is returned exactly once. If the token is lost, the client must
+create a new mailbox.
+
+**Duplicate `mailbox_id`.** Returns `409 Conflict`.
 
 ### 5.2 Send Message to Mailbox
 
@@ -277,7 +294,12 @@ Body:
 Response: 200 OK
 ```
 
-Server deletes acknowledged messages and resets sequence tracking.
+Server deletes the acknowledged messages. **The per-mailbox sequence
+counter is monotonic forever and is NOT reset by acknowledgement** — if a
+mailbox has been assigned sequences 1-100 and the client acks all of them,
+the next message receives sequence 101 (not 1). This is a stronger guarantee
+than a typical message-queue ack and is required so out-of-order or
+late-arriving messages cannot be confused with fresh ones (ADR 007).
 
 ### 5.5 WebSocket Connection
 
@@ -303,11 +325,37 @@ Client sends acknowledgments:
 
 ```
 Algorithm: Hashcash-style
-Input: mailbox_id + nonce
-Requirement: SHA-256(mailbox_id || nonce) has N leading zero bits
-N is configurable server-side (difficulty parameter)
-Client iterates nonce values until the requirement is met
+Input:     utf8(mailbox_id) || utf8(decimal_ascii_nonce)
+Digest:    SHA-256(input)            -- 32 bytes
+Solved:    leading_zero_bits(digest) >= N
+N:         server-configured difficulty (advertised at /v1/pow-params)
+Client iterates nonce = 0, 1, 2, ... encoded as decimal ASCII, until solved.
 ```
+
+**Input encoding (normative).** `mailbox_id` is its UTF-8 byte
+representation; `nonce` is the unsigned-integer nonce rendered as decimal
+ASCII (e.g., `"42"`). The two byte strings are concatenated with no
+separator. `leading_zero_bits` counts zero bits MSB-first across the digest.
+
+### 5.7 Proof-of-Work Parameters
+
+```
+GET /v1/pow-params
+No authentication
+
+Response: 200 OK
+{
+  "difficulty_bits": <int>,
+  "algorithm": "sha256-leading-zero-bits",
+  "input": "utf8(mailbox_id) || utf8(decimal_nonce)",
+  "mailbox_id_min_length": <int>
+}
+```
+
+Public endpoint. Returns the current PoW parameters so clients can mine a
+solution before calling §5.1. The server may change `difficulty_bits` at
+any time; clients should refresh the parameters on each mailbox creation
+attempt rather than caching.
 
 ## 6. X3DH Key Agreement
 
