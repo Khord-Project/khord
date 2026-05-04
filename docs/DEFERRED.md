@@ -207,3 +207,15 @@ Threema's mediator server model was considered and rejected — it introduces a 
 **Blockers to avoid:** None specific — this is additive.
 
 **Trigger:** Before public release. Abuse prevention is a prerequisite for a real-world communication tool.
+
+---
+
+## D-013: Cross-Implementation X3DH Parity Test
+
+**What:** Run the X3DH key agreement with identical inputs in both Khord (Kotlin/ionspin) and an independent implementation (Python/PyNaCl + manual HKDF), verify both produce identical SK.
+
+**Why deferred:** Current tests verify Alice and Bob derive the same SK internally, and the HKDF foundation is proven correct against RFC 5869 vectors. A cross-implementation check would catch Khord-spec-level bugs (wrong info string, wrong AD construction, wrong F prefix handling) that are currently covered only by spec traceability comments.
+
+**Blockers to avoid:** None — this is a test-only concern.
+
+**Trigger:** Before the professional security audit. This should be part of the audit preparation checklist.
