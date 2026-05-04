@@ -4,8 +4,13 @@ agp = "9.2.0"
 compileSdk = "36"
 minSdk = "26"
 targetSdk = "36"
+libsodium = "0.9.5"
+coroutines = "1.10.2"
 
 [libraries]
+libsodium = { module = "com.ionspin.kotlin:multiplatform-crypto-libsodium-bindings", version.ref = "libsodium" }
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 
 [plugins]
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

@@ -60,9 +60,9 @@ All primitives from libsodium:
 | Key agreement key pair | X25519 | crypto_box_keypair (or convert from Ed25519) |
 | Diffie-Hellman | X25519 | crypto_scalarmult |
 | Signatures | Ed25519 | crypto_sign_detached / crypto_sign_verify_detached |
-| Symmetric encryption | XSalsa20-Poly1305 | crypto_secretbox / crypto_secretbox_open |
-| AEAD (if needed) | XChaCha20-Poly1305 | crypto_aead_xchacha20poly1305_ietf_encrypt |
-| Key derivation | HKDF-SHA-256 | crypto_kdf_* or manual HMAC-based HKDF |
+| AEAD (Double Ratchet) | XChaCha20-Poly1305-IETF | crypto_aead_xchacha20poly1305_ietf_encrypt / _decrypt |
+| Key derivation | HKDF-SHA-256 (RFC 5869) | manual HMAC-SHA-256 over crypto_hash_sha256 |
+| HMAC | HMAC-SHA-256 | manual implementation per RFC 2104 (libsodium's `crypto_auth_hmacsha256` is hardcoded to a 32-byte key and unsuitable for arbitrary-length salts) |
 | Password-based KDF | Argon2id | crypto_pwhash |
 | Random bytes | OS CSPRNG | randombytes_buf |
 | Hashing | SHA-256 | crypto_hash_sha256 |
@@ -71,17 +71,30 @@ All primitives from libsodium:
 
 ```
 seed_phrase → UTF-8 bytes
-salt = "khord-identity-v1" (fixed, documented)
-raw_seed = Argon2id(seed_phrase_bytes, salt,
-                     opslimit=MODERATE, memlimit=MODERATE)
-identity_signing_key = Ed25519 keypair from raw_seed (crypto_sign_seed_keypair)
+salt        = "khord-identity01"   (literal 16 ASCII bytes, no padding, no hashing)
+raw_seed    = Argon2id(seed_phrase_bytes, salt,
+                       opslimit  = crypto_pwhash_OPSLIMIT_MODERATE  = 3,
+                       memlimit  = crypto_pwhash_MEMLIMIT_MODERATE  = 268_435_456 (256 MiB),
+                       algorithm = crypto_pwhash_argon2id_ALG_ARGON2ID13 = 2,
+                       outlen    = 32)
+identity_signing_key   = Ed25519 keypair from raw_seed (crypto_sign_seed_keypair)
 identity_agreement_key = X25519 keypair converted from Ed25519 keypair
+                         (crypto_sign_ed25519_pk_to_curve25519 / _sk_to_curve25519)
 fingerprint = hex(SHA-256(identity_public_signing_key))
 ```
 
-The fingerprint is the full 32-byte SHA-256 digest, hex-encoded as a 64-character lowercase string. **No truncation.**
+The fingerprint is the full 32-byte SHA-256 digest, hex-encoded as a
+64-character lowercase string. **No truncation.**
 
-**Note:** The exact Argon2id parameters (opslimit, memlimit) must be documented and fixed across all client implementations. Any change produces a different key from the same seed.
+The salt is fixed at exactly 16 ASCII bytes (libsodium requires
+`crypto_pwhash_SALTBYTES = 16`). The literal string `"khord-identity01"`
+is chosen so any independent implementation can reproduce the salt
+byte-for-byte without padding rules or hashing.
+
+**Note:** The Argon2id parameters above are LOAD-BEARING. Any deviation
+produces a different identity key from the same seed phrase, breaking
+recovery for every existing user. Independent client implementations must
+match these exact values.
 
 ## 4. Key Server API
 
@@ -378,15 +391,29 @@ Alice fetches Bob's pre-key bundle from Key Server, then:
    - DH2 = DH(Alice_EK, Bob_IK)
    - DH3 = DH(Alice_EK, Bob_SPK)
    - DH4 = DH(Alice_EK, Bob_OPK) [if OPK available]
-4. SK = HKDF(DH1 || DH2 || DH3 [|| DH4], info="khord-x3dh-v1")
-5. Initialize Double Ratchet with SK
-6. Encrypt initial message with Double Ratchet
-7. Send to Bob's relay mailbox:
-   - Alice's identity key
-   - Alice's ephemeral public key
+4. Derive SK via HKDF-SHA-256 (X3DH §2.2):
+
+   ```
+   F    = 32 bytes of 0xFF                       (X25519 curve discriminator)
+   KM   = F || DH1 || DH2 || DH3 [|| DH4]
+   salt = 32 zero bytes                          (HashLen-zero salt per X3DH §2.2)
+   info = b"khord-x3dh-v1"                       (UTF-8 bytes)
+   SK   = HKDF-Extract-then-Expand(salt, KM, info, 32)
+   ```
+
+5. Build associated data: `AD = Encode(IK_A) || Encode(IK_B)` where
+   `Encode(IK)` is the **raw 32-byte Ed25519 public key bytes** (Khord-
+   specific resolution of X3DH §3.3's encoding choice — both endpoints
+   are Ed25519/X25519-only, so no curve-type prefix is required).
+6. Initialize the Double Ratchet with SK.
+7. Encrypt the initial message with the Double Ratchet (the AEAD's
+   associated data is `AD || header_bytes`, see §7.2).
+8. Send to Bob's relay mailbox:
+   - Alice's identity key (Ed25519 public, 32 B)
+   - Alice's ephemeral public key (X25519 public, 32 B)
    - Bob's SPK key_id used
    - Bob's OPK key_id used (if any)
-   - Encrypted message
+   - Ratchet header + ciphertext
 
 ### 6.3 Receiving Initial Message (Bob)
 
@@ -412,33 +439,86 @@ Each session (per contact) maintains:
 - Receiving ratchet public key (DHr)
 - Skipped message keys (for out-of-order delivery)
 
+**Skipped-key bounds (recommended for interoperability).**
+Implementations should cap the size of the skipped-message-key store to
+prevent a malicious sender from forcing unbounded memory use:
+
+| Bound | Value | Meaning |
+|---|---|---|
+| `MAX_SKIP_PER_CHAIN` | 1000 | Max messages skipped in a single decrypt call |
+| `MAX_SKIP_TOTAL` | 2000 | Max retained skipped-message-key entries across all chains |
+
+Receivers must abort the decrypt with a recoverable error on overflow.
+Khord clients enforce these exact values; independent implementations are
+encouraged to match for cross-implementation compatibility.
+
 ### 7.2 Message Header (inside encrypted blob)
 
-```
-{
-  "dh_public_key": "<base64 current ratchet public key>",
-  "previous_chain_length": <uint32>,
-  "message_number": <uint32>
-}
-```
-
-### 7.3 Encryption
+The header is encoded as canonical JSON with **locked field order** and
+no whitespace, no trailing comma, no optional fields:
 
 ```
-1. If DHr has changed, perform DH ratchet step (advance root key, create new chain)
-2. Derive message key from sending chain: MK = KDF(CKs)
-3. Advance sending chain: CKs = KDF(CKs)
-4. Encrypt plaintext with MK using crypto_secretbox
-5. Attach header (current DH public key, chain length, message number)
+{"dh_public_key":"<base64 current ratchet public key>","previous_chain_length":<uint32>,"message_number":<uint32>}
 ```
 
-### 7.4 Decryption
+Field order must be exactly `dh_public_key`, `previous_chain_length`,
+`message_number`. The byte representation of the header is part of the
+AEAD's associated data, so any whitespace or field-order variance
+between sender and receiver causes the decrypt to fail even when keys
+match.
+
+### 7.3 KDFs
 
 ```
-1. Check if message key is in skipped keys store
-2. If header DH public key differs from stored DHr, perform DH ratchet
-3. Derive message key from receiving chain
-4. Decrypt and verify
+KDF_RK(rk, dh_out)  → (rk', ck)         (32 + 32 bytes)
+                     = HKDF-SHA-256(salt = rk, IKM = dh_out,
+                                     info = b"khord-rr-v1", L = 64)
+                     split into rk' || ck (32 || 32)
+
+KDF_CK(ck)          → (ck', mk)         (32 + 32 bytes)
+                     mk  = HMAC-SHA-256(ck, b"\x01")
+                     ck' = HMAC-SHA-256(ck, b"\x02")
+```
+
+### 7.4 Encryption
+
+```
+1. If CKs is null, this side cannot send yet — the next received message
+   will trigger a DH ratchet step that establishes CKs.
+2. (CKs, mk) = KDF_CK(CKs)
+3. Build header(DHs.public, PN, Ns) and serialise to canonical JSON bytes.
+4. Increment Ns.
+5. Encrypt plaintext with crypto_aead_xchacha20poly1305_ietf_encrypt:
+     nonce = random(24)
+     associated_data = AD || header_bytes
+     payload = nonce || aead_ciphertext
+6. Wipe mk from memory after use.
+```
+
+### 7.5 Decryption
+
+Decryption MUST be implemented copy-on-write: state mutations are committed
+only when AEAD verification succeeds. A decrypt failure (tampered
+ciphertext, wrong key, AD mismatch) must leave the receiver's state
+unchanged so that a subsequent legitimate frame still decrypts.
+
+```
+1. Snapshot the ratchet state.
+2. If (header.dh_public_key, header.message_number) is in the skipped
+   message-key store: pop the cached MK and decrypt with it. Return.
+3. If header.dh_public_key differs from DHr (or DHr is null):
+     a. SkipMessageKeys(state, header.previous_chain_length)
+        — caches every MK in the still-unfinished old receiving chain,
+          subject to the §7.1 caps.
+     b. Perform a DH ratchet step (advance RK, derive new CKr, then
+        rotate DHs and derive new CKs).
+4. SkipMessageKeys(state, header.message_number) for any gap in the
+   current chain.
+5. (CKr, mk) = KDF_CK(CKr); increment Nr.
+6. associated_data = AD || header_bytes
+7. plaintext = crypto_aead_xchacha20poly1305_ietf_decrypt(...)
+   — if this raises, restore from the snapshot and propagate the error.
+8. Wipe mk.
 ```
 
 ## 8. Encrypted Payload Format
