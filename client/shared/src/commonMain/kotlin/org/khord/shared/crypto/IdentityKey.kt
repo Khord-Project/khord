@@ -13,6 +13,7 @@ import com.ionspin.kotlin.crypto.signature.Signature
  * SHA-256 of the Ed25519 public key) is the user's stable public identifier.
  */
 @OptIn(ExperimentalUnsignedTypes::class)
+@ConsistentCopyVisibility
 data class IdentityKey internal constructor(
     val ed25519PublicKey: ByteArray,
     internal val ed25519SecretKey: ByteArray,
