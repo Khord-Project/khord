@@ -1,0 +1,39 @@
+CREATE TABLE session (
+    contact_fingerprint    TEXT    NOT NULL PRIMARY KEY REFERENCES contact(fingerprint) ON DELETE CASCADE,
+    inbound_mailbox        TEXT    NOT NULL UNIQUE,
+    inbound_bearer_token   TEXT    NOT NULL,
+    outbound_mailbox       TEXT    NOT NULL,
+    outbound_relay_server  TEXT    NOT NULL,
+    associated_data        BLOB    NOT NULL,
+    ratchet_state          BLOB    NOT NULL,
+    last_fetched_sequence  INTEGER NOT NULL DEFAULT 0,
+    updated_at             TEXT    NOT NULL
+);
+
+CREATE INDEX session_by_inbound_mailbox ON session(inbound_mailbox);
+
+upsertSession:
+INSERT OR REPLACE INTO session(
+    contact_fingerprint, inbound_mailbox, inbound_bearer_token,
+    outbound_mailbox, outbound_relay_server, associated_data,
+    ratchet_state, last_fetched_sequence, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectSessionByFingerprint:
+SELECT * FROM session WHERE contact_fingerprint = ?;
+
+selectAllSessions:
+SELECT * FROM session;
+
+updateRatchetState:
+UPDATE session
+   SET ratchet_state = ?, updated_at = ?
+ WHERE contact_fingerprint = ?;
+
+updateLastFetchedSequence:
+UPDATE session
+   SET last_fetched_sequence = ?, updated_at = ?
+ WHERE contact_fingerprint = ?;
+
+deleteSession:
+DELETE FROM session WHERE contact_fingerprint = ?;

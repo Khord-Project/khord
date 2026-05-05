@@ -1,0 +1,23 @@
+CREATE TABLE contact (
+    fingerprint        TEXT NOT NULL PRIMARY KEY,
+    ed25519_public     BLOB NOT NULL,
+    key_server_url     TEXT NOT NULL,
+    relay_server_url   TEXT NOT NULL,
+    contact_mailbox    TEXT NOT NULL,
+    stored_at          TEXT NOT NULL
+);
+
+upsertContact:
+INSERT OR REPLACE INTO contact(
+    fingerprint, ed25519_public, key_server_url, relay_server_url,
+    contact_mailbox, stored_at
+) VALUES (?, ?, ?, ?, ?, ?);
+
+selectContactByFingerprint:
+SELECT * FROM contact WHERE fingerprint = ?;
+
+selectAllContacts:
+SELECT * FROM contact;
+
+deleteContact:
+DELETE FROM contact WHERE fingerprint = ?;

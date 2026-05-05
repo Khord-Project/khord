@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.androidKmpLibrary)
+    alias(libs.plugins.sqldelight)
 }
 
 kotlin {
@@ -28,6 +29,14 @@ kotlin {
 
     jvmToolchain(17)
 
+    compilerOptions {
+        // We use `expect class DriverFactory` for the per-target SQLDelight
+        // driver. expect/actual classes are flagged "Beta" in 2.x even
+        // though the language committee accepted them; the warning exists
+        // mostly as a migration nudge.
+        freeCompilerArgs.add("-Xexpect-actual-classes")
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(libs.libsodium)
@@ -37,6 +46,8 @@ kotlin {
             implementation(libs.ktor.serialization.json)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.datetime)
+            implementation(libs.sqldelight.runtime)
+            implementation(libs.sqldelight.coroutines)
         }
 
         commonTest.dependencies {
@@ -46,6 +57,22 @@ kotlin {
 
         jvmMain.dependencies {
             implementation(libs.ktor.client.java)
+            implementation(libs.sqldelight.driver.sqlite)
+            implementation(libs.sqlite.jdbc)
+        }
+
+        // Android driver dep wired here so the eventual Android UI module
+        // pulls a real driver. Currently no Android tests exercise it.
+        androidMain.dependencies {
+            implementation(libs.sqldelight.driver.android)
+        }
+    }
+}
+
+sqldelight {
+    databases {
+        create("KhordDatabase") {
+            packageName.set("org.khord.shared.storage.db")
         }
     }
 }

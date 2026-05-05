@@ -1,0 +1,39 @@
+CREATE TABLE signed_pre_key (
+    id          INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    key_id      INTEGER NOT NULL,
+    public_key  BLOB    NOT NULL,
+    secret_key  BLOB    NOT NULL
+);
+
+CREATE TABLE one_time_pre_key (
+    key_id      INTEGER NOT NULL PRIMARY KEY,
+    secret_key  BLOB    NOT NULL
+);
+
+selectSignedPreKey:
+SELECT key_id, public_key, secret_key FROM signed_pre_key WHERE id = 1;
+
+upsertSignedPreKey:
+INSERT OR REPLACE INTO signed_pre_key(id, key_id, public_key, secret_key)
+VALUES (1, ?, ?, ?);
+
+deleteSignedPreKey:
+DELETE FROM signed_pre_key;
+
+insertOpkSecret:
+INSERT INTO one_time_pre_key(key_id, secret_key) VALUES (?, ?);
+
+selectOpkSecret:
+SELECT secret_key FROM one_time_pre_key WHERE key_id = ?;
+
+selectAllOpkSecrets:
+SELECT key_id, secret_key FROM one_time_pre_key;
+
+countOpkSecrets:
+SELECT COUNT(*) FROM one_time_pre_key;
+
+deleteOpkSecret:
+DELETE FROM one_time_pre_key WHERE key_id = ?;
+
+deleteAllOpkSecrets:
+DELETE FROM one_time_pre_key;

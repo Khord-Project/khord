@@ -1,0 +1,14 @@
+CREATE TABLE key_server_token (
+    id          INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    token       TEXT    NOT NULL,
+    expires_at  TEXT    NOT NULL
+);
+
+upsertToken:
+INSERT OR REPLACE INTO key_server_token(id, token, expires_at) VALUES (1, ?, ?);
+
+selectToken:
+SELECT token, expires_at FROM key_server_token WHERE id = 1;
+
+deleteToken:
+DELETE FROM key_server_token;

@@ -53,10 +53,22 @@ class Messaging internal constructor(
     private val keyServerUrl: String,
     private val relayServerUrl: String,
     private val http: HttpClient,
+    private val persistence: org.khord.shared.storage.Persistence,
 ) {
 
     private val ksClient = KeyServerClient(http, keyServerUrl)
     private val rsClient = RelayServerClient(http, relayServerUrl)
+
+    /**
+     * Set to true after [panic]. Every public method throws [IllegalStateException]
+     * after this, so the caller is forced to construct a fresh instance.
+     */
+    @Volatile
+    private var panicked: Boolean = false
+
+    private fun checkAlive() {
+        check(!panicked) { "Messaging instance is dead — panic() was called; construct a new one" }
+    }
 
     /** Contacts the user has scanned QR codes for, keyed by their fingerprint. */
     private val contactsByFingerprint = mutableMapOf<String, QrPayload>()
@@ -95,6 +107,7 @@ class Messaging internal constructor(
      * SPK/OPKs and replaces the server bundle.
      */
     suspend fun register(opkBatchSize: Int = 50) {
+        checkAlive()
         require(opkBatchSize in 1..255) { "opkBatchSize out of range" }
 
         val spkGen = PreKeys.generateSignedPreKey(identity, keyId = 1)
@@ -108,6 +121,26 @@ class Messaging internal constructor(
         for (gen in opkGens) {
             opkSecretByKeyId[gen.oneTimePreKey.keyId] = gen.secretKey.copyOf()
         }
+
+        // Persist identity + SPK + OPKs locally.
+        persistence.saveIdentity(
+            org.khord.shared.storage.IdentityRecord(
+                identity = identity,
+                keyServerUrl = keyServerUrl,
+                relayServerUrl = relayServerUrl,
+                createdAt = kotlinx.datetime.Clock.System.now().toString(),
+            )
+        )
+        persistence.saveSignedPreKey(
+            org.khord.shared.storage.SignedPreKeyRecord(
+                keyId = spkGen.signedPreKey.keyId,
+                publicKey = spkGen.signedPreKey.publicKey,
+                secretKey = spkGen.secretKey,
+            )
+        )
+        persistence.saveOpkBatch(
+            opkGens.associate { it.oneTimePreKey.keyId to it.secretKey }
+        )
 
         val token = obtainKeyServerToken()
         ksClient.uploadBundle(
@@ -139,8 +172,10 @@ class Messaging internal constructor(
      * binds it to a [ContactSession].
      */
     suspend fun myQrPayload(): QrPayload {
+        checkAlive()
         val (mailboxId, token) = createInboundMailbox()
         pendingInboundMailboxes[mailboxId] = token
+        persistence.savePendingMailbox(mailboxId, token)
         return QrPayload(
             identityKey = Base64Std.encode(identity.ed25519PublicKey),
             fingerprint = identity.fingerprint,
@@ -161,6 +196,7 @@ class Messaging internal constructor(
      * not silently drop them, but stays in the pending state.
      */
     suspend fun pollPendingMailboxes(): List<NewContact> {
+        checkAlive()
         val results = mutableListOf<NewContact>()
         val toClear = mutableListOf<String>()
         for ((mailboxId, token) in pendingInboundMailboxes.toMap()) {
@@ -183,10 +219,20 @@ class Messaging internal constructor(
                 // and belong to the now-bound contact.
                 rsClient.acknowledge(mailboxId, token, m.sequence)
                 session.lastFetchedSequence = m.sequence
+                persistence.updateLastFetchedSequence(session.contactFingerprint, m.sequence)
+                persistence.saveMessage(
+                    contactFingerprint = session.contactFingerprint,
+                    direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+                    body = text,
+                    timestamp = kotlinx.datetime.Clock.System.now().toString(),
+                )
                 break
             }
         }
-        toClear.forEach { pendingInboundMailboxes.remove(it) }
+        for (mailboxId in toClear) {
+            pendingInboundMailboxes.remove(mailboxId)
+            persistence.deletePendingMailbox(mailboxId)
+        }
         return results
     }
 
@@ -197,8 +243,10 @@ class Messaging internal constructor(
     data class NewContact(val session: ContactSession, val firstMessage: String)
 
     /** Persist a contact's QR (called after scanning the QR out-of-band). */
-    fun storeContact(contactQr: QrPayload) {
+    suspend fun storeContact(contactQr: QrPayload) {
+        checkAlive()
         contactsByFingerprint[contactQr.fingerprint] = contactQr
+        persistence.saveContact(contactQr)
     }
 
     /**
@@ -219,6 +267,7 @@ class Messaging internal constructor(
         myInboundMailboxId: String,
         firstMessage: String,
     ): ContactSession {
+        checkAlive()
         val myInboundToken = pendingInboundMailboxes[myInboundMailboxId]
             ?: throw IllegalStateException(
                 "myInboundMailboxId is not a pending mailbox — call myQrPayload() " +
@@ -267,9 +316,10 @@ class Messaging internal constructor(
 
         // Init my ratchet, encrypt the first inner payload.
         val session = Session.fromInitiator(initOut, cryptoBundle.signedPreKey.publicKey)
+        val firstMessageTimestamp = Clock.System.now().toString()
         val payload = InnerPayload(
             type = "text",
-            timestamp = Clock.System.now().toString(),
+            timestamp = firstMessageTimestamp,
             body = firstMessage,
         )
         val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
@@ -296,6 +346,8 @@ class Messaging internal constructor(
         // Bind the existing pending mailbox (the one I shared in my QR) to
         // this session — that's where the contact's replies will land.
         pendingInboundMailboxes.remove(myInboundMailboxId)
+        persistence.deletePendingMailbox(myInboundMailboxId)
+
         val contactSession = ContactSession(
             contactIdentityKey = contactIdEd,
             contactFingerprint = contactQr.fingerprint,
@@ -306,6 +358,14 @@ class Messaging internal constructor(
             session = session,
         )
         sessionsByInboundMailbox[myInboundMailboxId] = contactSession
+        persistSession(contactSession)
+        // Persist the first sent message so it shows up in local history.
+        persistence.saveMessage(
+            contactFingerprint = contactSession.contactFingerprint,
+            direction = org.khord.shared.storage.MessageDirection.SENT,
+            body = firstMessage,
+            timestamp = firstMessageTimestamp,
+        )
         return contactSession
     }
 
@@ -351,10 +411,11 @@ class Messaging internal constructor(
             )
         )
 
-        // OPK forward secrecy: wipe + remove from the local store.
+        // OPK forward secrecy: wipe + remove from the local store + DB.
         if (envelope.opkId != null) {
             val secret = opkSecretByKeyId.remove(envelope.opkId)
             secret?.wipe()
+            persistence.deleteOneTimePreKey(envelope.opkId)
         }
 
         val ad = X3dh.associatedDataFor(ikA, identity)
@@ -384,16 +445,15 @@ class Messaging internal constructor(
             session = session,
         )
         sessionsByInboundMailbox[myInboundMailbox] = contactSession
+        persistSession(contactSession)
         return contactSession to text
     }
 
     /** Send a text message to the contact this session is bound to. */
     suspend fun sendMessage(contact: ContactSession, text: String): Long {
-        val payload = InnerPayload(
-            type = "text",
-            timestamp = Clock.System.now().toString(),
-            body = text,
-        )
+        checkAlive()
+        val timestamp = Clock.System.now().toString()
+        val payload = InnerPayload(type = "text", timestamp = timestamp, body = text)
         val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
             .encodeToByteArray()
         val encrypted = contact.session.encrypt(plaintextBytes)
@@ -411,7 +471,18 @@ class Messaging internal constructor(
         } else {
             RelayServerClient(http, contact.outboundRelayServer)
         }
-        return rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
+        val sequence = rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
+
+        // Persist message + advanced ratchet state.
+        persistence.saveMessage(
+            contactFingerprint = contact.contactFingerprint,
+            direction = org.khord.shared.storage.MessageDirection.SENT,
+            body = text,
+            timestamp = timestamp,
+        )
+        persistSession(contact)
+
+        return sequence
     }
 
     /**
@@ -419,6 +490,7 @@ class Messaging internal constructor(
      * decrypted plaintexts in sequence order. Acks the highest sequence.
      */
     suspend fun receiveMessages(contact: ContactSession): List<String> {
+        checkAlive()
         val fetched = rsClient.fetchMessages(
             mailboxId = contact.inboundMailboxId,
             bearerToken = contact.inboundBearerToken,
@@ -440,7 +512,14 @@ class Messaging internal constructor(
                 InnerPayload.serializer(),
                 plaintextBytes.decodeToString(),
             )
-            plaintexts += decodeInnerPayloadText(payload)
+            val text = decodeInnerPayloadText(payload)
+            plaintexts += text
+            persistence.saveMessage(
+                contactFingerprint = contact.contactFingerprint,
+                direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+                body = text,
+                timestamp = payload.timestamp,
+            )
         }
 
         val highestSequence = fetched.last().sequence
@@ -450,12 +529,18 @@ class Messaging internal constructor(
             throughSequence = highestSequence,
         )
         contact.lastFetchedSequence = highestSequence
+        persistence.updateLastFetchedSequence(contact.contactFingerprint, highestSequence)
+        persistSession(contact)
         return plaintexts
     }
 
     // ─── internals ────────────────────────────────────────────────────────
 
-    /** Cached lazy challenge-response token mint. */
+    /**
+     * Cached lazy challenge-response token mint.
+     * Persists the token so a fresh process doesn't have to re-mint after
+     * a restart unless the previous token has expired.
+     */
     private suspend fun obtainKeyServerToken(): String {
         keyServerToken?.let { return it }
         val challenge = ksClient.requestChallenge(identity.fingerprint)
@@ -469,6 +554,14 @@ class Messaging internal constructor(
             identityPublicKey = identity.ed25519PublicKey,
         )
         keyServerToken = token
+        // Stateless tokens have a known TTL (15 min) but we don't know the
+        // server's clock; record the current-time + a conservative 14 min
+        // window so callers can expire on their own clock if they care.
+        persistence.saveKeyServerToken(
+            token = token,
+            expiresAt = (kotlinx.datetime.Clock.System.now() +
+                kotlin.time.Duration.parse("PT14M")).toString(),
+        )
         return token
     }
 
@@ -499,15 +592,167 @@ class Messaging internal constructor(
             .sha256(ed25519Pub.toUByteArray()).toByteArray()
             .joinToString("") { ((it.toInt() and 0xff)).toString(16).padStart(2, '0') }
 
+    /** Mirror the live ratchet state of `contact` to the persistence layer. */
+    private suspend fun persistSession(contact: ContactSession) {
+        persistence.saveSession(
+            org.khord.shared.storage.SessionRecord(
+                contactFingerprint = contact.contactFingerprint,
+                inboundMailbox = contact.inboundMailboxId,
+                inboundBearerToken = contact.inboundBearerToken,
+                outboundMailbox = contact.outboundMailboxId,
+                outboundRelayServer = contact.outboundRelayServer,
+                associatedData = contact.session.associatedData,
+                ratchetState = contact.session.ratchetStateForPersistence(),
+                lastFetchedSequence = contact.lastFetchedSequence,
+                updatedAt = kotlinx.datetime.Clock.System.now().toString(),
+            )
+        )
+    }
+
+    /**
+     * Local message history for a contact — read straight from the DB so the
+     * UI doesn't need to re-implement loading.
+     */
+    suspend fun messageHistory(contactFingerprint: String): List<MessageEntry> {
+        checkAlive()
+        return persistence.loadMessages(contactFingerprint).map {
+            MessageEntry(
+                id = it.id,
+                direction = if (it.direction == org.khord.shared.storage.MessageDirection.SENT)
+                    MessageEntry.Direction.SENT else MessageEntry.Direction.RECEIVED,
+                body = it.body,
+                timestamp = it.timestamp,
+            )
+        }
+    }
+
+    /**
+     * Wipe absolutely everything: persistence is told to wipe and close,
+     * in-memory secrets are zeroed, and the orchestrator becomes inert.
+     * Subsequent calls on this instance throw — construct a new one.
+     */
+    suspend fun panic() {
+        if (panicked) return
+        panicked = true
+        // 1. Wipe persisted state + delete DB file (DbPersistence) / clear caches.
+        try { persistence.panic() } catch (_: Throwable) { /* still wipe RAM */ }
+        // 2. Wipe in-memory secrets.
+        spkSecret?.wipe(); spkSecret = null
+        spkPublic?.fill(0); spkPublic = null
+        spkKeyId = -1
+        for (secret in opkSecretByKeyId.values) secret.wipe()
+        opkSecretByKeyId.clear()
+        contactsByFingerprint.clear()
+        sessionsByInboundMailbox.clear()
+        pendingInboundMailboxes.clear()
+        keyServerToken = null
+    }
+
+    /** Public read of the current contact session list (live, in-memory). */
+    fun contacts(): List<ContactSession> = sessionsByInboundMailbox.values.toList()
+
+    /** Test-only: lookup a session by inbound mailbox. */
+    internal fun contactByInboundMailbox(mailboxId: String): ContactSession? =
+        sessionsByInboundMailbox[mailboxId]
+
     companion object {
-        /** Construct a Messaging instance against the supplied servers. */
+        /**
+         * Public constructor — fresh in-memory orchestrator (no persistence).
+         * Callers that want durable state should use the internal
+         * [createWithPersistence] / [load] factories from within the shared
+         * module (the persistence layer is not part of Khord's public API yet).
+         */
         fun create(
             identity: IdentityKey,
             keyServerUrl: String,
             relayServerUrl: String,
             http: HttpClient,
-        ): Messaging = Messaging(identity, keyServerUrl, relayServerUrl, http)
+        ): Messaging = Messaging(
+            identity, keyServerUrl, relayServerUrl, http,
+            persistence = org.khord.shared.storage.InMemoryPersistence(),
+        )
+
+        /** Internal constructor with explicit persistence (e.g. DbPersistence). */
+        internal fun createWithPersistence(
+            identity: IdentityKey,
+            keyServerUrl: String,
+            relayServerUrl: String,
+            http: HttpClient,
+            persistence: org.khord.shared.storage.Persistence,
+        ): Messaging = Messaging(identity, keyServerUrl, relayServerUrl, http, persistence)
+
+        /**
+         * Reconstruct a previously-registered Messaging instance from
+         * `persistence`. Returns null if no identity has been saved yet
+         * (caller should fall back to fresh-registration flow).
+         *
+         * Loads identity, SPK + OPK secrets, contacts, pending mailboxes,
+         * sessions, and the cached key-server token from the store.
+         * In-memory state mirrors the loaded data; subsequent state changes
+         * re-persist as usual.
+         */
+        internal suspend fun load(
+            http: HttpClient,
+            persistence: org.khord.shared.storage.Persistence,
+        ): Messaging? {
+            val record = persistence.loadIdentity() ?: return null
+            val m = Messaging(
+                identity = record.identity,
+                keyServerUrl = record.keyServerUrl,
+                relayServerUrl = record.relayServerUrl,
+                http = http,
+                persistence = persistence,
+            )
+            persistence.loadSignedPreKey()?.let { spk ->
+                m.spkKeyId = spk.keyId
+                m.spkPublic = spk.publicKey.copyOf()
+                m.spkSecret = spk.secretKey.copyOf()
+            }
+            for ((id, secret) in persistence.loadAllOpkSecrets()) {
+                m.opkSecretByKeyId[id] = secret
+            }
+            for (contact in persistence.loadAllContacts()) {
+                m.contactsByFingerprint[contact.fingerprint] = contact
+            }
+            for ((mb, tok) in persistence.loadPendingMailboxes()) {
+                m.pendingInboundMailboxes[mb] = tok
+            }
+            for (session in persistence.loadAllSessions()) {
+                val contactIdEd = m.contactsByFingerprint[session.contactFingerprint]
+                    ?.let { Base64Std.decode(it.identityKey) }
+                    ?: continue   // Orphan session — skip; should not happen.
+                val cs = ContactSession(
+                    contactIdentityKey = contactIdEd,
+                    contactFingerprint = session.contactFingerprint,
+                    outboundMailboxId = session.outboundMailbox,
+                    outboundRelayServer = session.outboundRelayServer,
+                    inboundMailboxId = session.inboundMailbox,
+                    inboundBearerToken = session.inboundBearerToken,
+                    session = Session.fromExistingRatchet(
+                        ratchetState = session.ratchetState,
+                        associatedData = session.associatedData,
+                    ),
+                    lastFetchedSequence = session.lastFetchedSequence,
+                )
+                m.sessionsByInboundMailbox[session.inboundMailbox] = cs
+            }
+            persistence.loadKeyServerToken()?.let { m.keyServerToken = it.token }
+            return m
+        }
     }
+}
+
+/**
+ * A locally-stored message exposed to the UI — read-only view of one
+ * row in the messages table.
+ */
+data class MessageEntry(
+    val id: Long,
+    val direction: Direction,
+    val body: String,
+    val timestamp: String,
+) {
+    enum class Direction { SENT, RECEIVED }
 }
 
 // Tiny helper: exposed only so Messaging can validate QR payload bindings without

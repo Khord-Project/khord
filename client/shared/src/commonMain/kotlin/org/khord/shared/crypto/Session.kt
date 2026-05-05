@@ -32,6 +32,9 @@ internal class Session(
         return DoubleRatchet.decrypt(ratchetState, headerBytes, ciphertext, associatedData)
     }
 
+    /** Snapshot the current ratchet state for persistence (the live mutable instance). */
+    internal fun ratchetStateForPersistence(): RatchetState = ratchetState
+
     companion object {
         /**
          * Alice's session-bootstrap from a fresh X3DH initiator output.
@@ -56,5 +59,15 @@ internal class Session(
             val rs = DoubleRatchet.initBob(sk, bobSignedPreKeyPair)
             return Session(rs, associatedData)
         }
+
+        /**
+         * Reconstruct a session from a previously-persisted ratchet state +
+         * its associated data. Used by [org.khord.shared.protocol.orchestrator.Messaging.load]
+         * after the persistence layer has reloaded state from the DB.
+         */
+        fun fromExistingRatchet(
+            ratchetState: RatchetState,
+            associatedData: ByteArray,
+        ): Session = Session(ratchetState, associatedData)
     }
 }

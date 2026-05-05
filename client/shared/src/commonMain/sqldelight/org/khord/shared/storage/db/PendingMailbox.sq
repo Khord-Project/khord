@@ -1,0 +1,15 @@
+CREATE TABLE pending_mailbox (
+    mailbox_id    TEXT NOT NULL PRIMARY KEY,
+    bearer_token  TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+
+upsertPendingMailbox:
+INSERT OR REPLACE INTO pending_mailbox(mailbox_id, bearer_token, created_at)
+VALUES (?, ?, ?);
+
+selectAllPendingMailboxes:
+SELECT mailbox_id, bearer_token, created_at FROM pending_mailbox;
+
+deletePendingMailbox:
+DELETE FROM pending_mailbox WHERE mailbox_id = ?;

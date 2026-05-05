@@ -1,0 +1,26 @@
+CREATE TABLE message (
+    id                  INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    contact_fingerprint TEXT    NOT NULL REFERENCES contact(fingerprint) ON DELETE CASCADE,
+    direction           TEXT    NOT NULL CHECK (direction IN ('sent', 'received')),
+    body                TEXT    NOT NULL,
+    timestamp           TEXT    NOT NULL,
+    stored_at           TEXT    NOT NULL
+);
+
+CREATE INDEX message_by_contact ON message(contact_fingerprint, id);
+
+insertMessage:
+INSERT INTO message(contact_fingerprint, direction, body, timestamp, stored_at)
+VALUES (?, ?, ?, ?, ?);
+
+selectMessagesByContact:
+SELECT id, direction, body, timestamp, stored_at
+  FROM message
+ WHERE contact_fingerprint = ?
+ ORDER BY id ASC;
+
+deleteMessagesForContact:
+DELETE FROM message WHERE contact_fingerprint = ?;
+
+deleteAllMessages:
+DELETE FROM message;

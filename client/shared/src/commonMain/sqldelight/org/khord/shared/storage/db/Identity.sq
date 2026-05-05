@@ -1,0 +1,23 @@
+CREATE TABLE identity (
+    id                INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    ed25519_public    BLOB    NOT NULL,
+    ed25519_secret    BLOB    NOT NULL,
+    x25519_public     BLOB    NOT NULL,
+    x25519_secret     BLOB    NOT NULL,
+    fingerprint       TEXT    NOT NULL UNIQUE,
+    key_server_url    TEXT    NOT NULL,
+    relay_server_url  TEXT    NOT NULL,
+    created_at        TEXT    NOT NULL
+);
+
+selectIdentity:
+SELECT * FROM identity WHERE id = 1;
+
+upsertIdentity:
+INSERT OR REPLACE INTO identity(
+    id, ed25519_public, ed25519_secret, x25519_public, x25519_secret,
+    fingerprint, key_server_url, relay_server_url, created_at
+) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteIdentity:
+DELETE FROM identity;
