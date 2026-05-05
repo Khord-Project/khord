@@ -551,13 +551,93 @@ The QR code exchanged between contacts contains:
   "identity_key": "<base64 Ed25519 public key>",
   "fingerprint": "<hex-encoded SHA-256 fingerprint>",
   "key_server": "<Key Server base URL>",
+  "relay_server": "<Relay Server base URL>",
   "relay_mailbox": "<mailbox ID on Relay Server for receiving messages from this contact>"
 }
 ```
 
-**Security property:** Scanning the QR code provides the identity key directly. When the client later fetches the pre-key bundle from the Key Server, it verifies the identity key in the bundle matches the one from the QR code. This prevents Key Server key substitution attacks.
+The `relay_server` URL is required. Without it, the protocol would be
+hardcoded to a single relay-server operator, contradicting the split-trust
+model (ADR 002) — different users may run their clients against different
+relay-server instances. The contact's own preferred relay server is the
+authoritative location for `relay_mailbox`.
 
-## 10. Security Considerations
+**Security property:** Scanning the QR code provides the identity key
+directly. When the client later fetches the pre-key bundle from the Key
+Server, it verifies the identity key in the bundle matches the one from
+the QR code. This prevents Key Server key substitution attacks.
+
+## 10. Khord Wire Envelope
+
+The bytes a Khord client places in the relay server's `blob` field are not
+opaque ciphertext alone — they are a structured envelope that carries the
+X3DH metadata (on the very first message in a session) plus the Double
+Ratchet header and AEAD ciphertext. The envelope itself is JSON; the
+encrypted payload sits inside the AEAD ciphertext.
+
+### 10.1 Encoding
+
+```
+envelope_bytes = canonical_json(envelope)
+relay_blob     = base64(envelope_bytes)
+```
+
+The receiver does the inverse: base64-decode the relay blob to get the
+canonical JSON bytes; parse those as the envelope; then process by `type`.
+
+JSON encoding rules for cross-implementation compatibility:
+- field names use `snake_case`
+- the `type` field is the discriminator (matching kotlinx.serialization's
+  `classDiscriminator` default)
+- absent / `null` optional fields MAY be omitted on the wire
+- unknown fields MUST be tolerated by receivers
+
+### 10.2 `x3dh_initial` — first message in a new session
+
+```json
+{
+  "version": 1,
+  "type": "x3dh_initial",
+  "ik_a": "<base64 Alice's Ed25519 identity public, 32 B>",
+  "ek_a": "<base64 Alice's ephemeral X25519 public, 32 B>",
+  "spk_id": <int>,
+  "opk_id": <int|null>,
+  "header": "<base64 of canonical Double Ratchet header bytes (§7.2)>",
+  "ciphertext": "<base64 of (nonce || aead_ct) — what RatchetAead.encrypt returns>"
+}
+```
+
+This shape is sent ONCE per contact, when Alice initiates the X3DH
+agreement. The receiver runs `X3dh.respond` with their stored SPK + OPK
+secrets to derive SK, initialises the ratchet, and decrypts the inner
+payload (§8). The OPK private key MUST be deleted on successful X3DH
+(X3DH §3.4 — forward-secrecy hard requirement).
+
+### 10.3 `ratchet` — every subsequent message
+
+```json
+{
+  "version": 1,
+  "type": "ratchet",
+  "header": "<base64>",
+  "ciphertext": "<base64>"
+}
+```
+
+After the first X3DH bootstrap, every additional message uses this
+shape — there is no need to re-send the X3DH metadata. The receiver
+identifies the contact via the **mailbox ID** the blob arrived on
+(per-contact directional mailboxes, ADR 005); the wire envelope carries
+no sender identity.
+
+### 10.4 Forward compatibility
+
+Receivers MUST accept envelopes with an unknown `type` and surface a
+"unsupported message type" condition rather than failing the entire
+session. The `version` field allows breaking-change negotiation in a
+future revision.
+
+## 11. Security Considerations
 
 ### 10.1 Known Limitations (PoC)
 
