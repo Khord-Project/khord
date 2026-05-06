@@ -23,6 +23,9 @@ internal class InMemoryPersistence : Persistence {
 
     override suspend fun loadIdentity(): IdentityRecord? = identity
     override suspend fun saveIdentity(record: IdentityRecord) { identity = record }
+    override suspend fun markRegisteredAtServer() {
+        identity = identity?.copy(registeredAtServer = true)
+    }
 
     override suspend fun saveSignedPreKey(record: SignedPreKeyRecord) { spk = record }
     override suspend fun loadSignedPreKey(): SignedPreKeyRecord? = spk

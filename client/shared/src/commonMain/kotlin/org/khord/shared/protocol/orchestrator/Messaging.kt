@@ -92,6 +92,16 @@ class Messaging internal constructor(
     /** My OPK secrets keyed by ID. Entries are wiped+removed when an X3DH consumes one. */
     private val opkSecretByKeyId = mutableMapOf<Int, ByteArray>()
 
+    /**
+     * True if the local identity exists but the Key Server hasn't received
+     * (or hasn't acknowledged) our pre-key bundle yet. Set to false after
+     * a successful uploadBundle in [register]. UI should re-run [register]
+     * whenever this is true.
+     */
+    @Volatile
+    var needsServerRegistration: Boolean = true
+        private set
+
     /** Test-only: how many OPK secrets are still resident. */
     internal val opkSecretCount: Int get() = opkSecretByKeyId.size
 
@@ -161,6 +171,11 @@ class Messaging internal constructor(
             ),
             token = token,
         )
+        // Mark the identity as fully registered ONLY on a successful
+        // uploadBundle return — that's the partial-registration recovery
+        // boundary (investigation Q7).
+        persistence.markRegisteredAtServer()
+        needsServerRegistration = false
     }
 
     /**
@@ -651,6 +666,9 @@ class Messaging internal constructor(
     /** Public read of the current contact session list (live, in-memory). */
     fun contacts(): List<ContactSession> = sessionsByInboundMailbox.values.toList()
 
+    /** This user's own identity fingerprint. Stable across app launches. */
+    val myFingerprint: String get() = identity.fingerprint
+
     /** Test-only: lookup a session by inbound mailbox. */
     internal fun contactByInboundMailbox(mailboxId: String): ContactSession? =
         sessionsByInboundMailbox[mailboxId]
@@ -703,6 +721,7 @@ class Messaging internal constructor(
                 http = http,
                 persistence = persistence,
             )
+            m.needsServerRegistration = !record.registeredAtServer
             persistence.loadSignedPreKey()?.let { spk ->
                 m.spkKeyId = spk.keyId
                 m.spkPublic = spk.publicKey.copyOf()

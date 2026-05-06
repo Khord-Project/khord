@@ -61,10 +61,12 @@ kotlin {
             implementation(libs.sqlite.jdbc)
         }
 
-        // Android driver dep wired here so the eventual Android UI module
-        // pulls a real driver. Currently no Android tests exercise it.
         androidMain.dependencies {
             implementation(libs.sqldelight.driver.android)
+            // SQLCipher's SupportOpenHelperFactory is wired into
+            // DriverFactory.android.kt — needs to be on the androidMain
+            // classpath, not just the consuming :android module.
+            implementation(libs.sqlcipher.android)
         }
     }
 }

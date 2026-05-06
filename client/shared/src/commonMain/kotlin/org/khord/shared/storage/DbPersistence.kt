@@ -49,6 +49,7 @@ internal class DbPersistence(
             keyServerUrl = row.key_server_url,
             relayServerUrl = row.relay_server_url,
             createdAt = row.created_at,
+            registeredAtServer = row.registered_at_server != 0L,
         )
     }
 
@@ -62,7 +63,12 @@ internal class DbPersistence(
             key_server_url = record.keyServerUrl,
             relay_server_url = record.relayServerUrl,
             created_at = record.createdAt,
+            registered_at_server = if (record.registeredAtServer) 1L else 0L,
         )
+    }
+
+    override suspend fun markRegisteredAtServer() {
+        db.identityQueries.markRegisteredAtServer()
     }
 
     // ── Pre-keys ────────────────────────────────────────────────────────────

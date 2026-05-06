@@ -13,7 +13,7 @@ import io.ktor.serialization.kotlinx.json.json
  * has no per-target `actual` declarations for the HTTP layer — only a
  * single `commonMain` factory that takes the engine as input.
  */
-internal fun khordHttpClient(engineFactory: HttpClientEngineFactory<*>): HttpClient =
+fun khordHttpClient(engineFactory: HttpClientEngineFactory<*>): HttpClient =
     HttpClient(engineFactory) {
         expectSuccess = false  // we read status codes explicitly per endpoint
         install(ContentNegotiation) {

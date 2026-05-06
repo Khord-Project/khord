@@ -1,0 +1,5 @@
+-- Migration from schema version 1 to 2.
+-- Adds identity.registered_at_server so Messaging.load can detect a
+-- partial registration (identity persisted locally but pre-key bundle
+-- never reached the Key Server) and recover by re-running register().
+ALTER TABLE identity ADD COLUMN registered_at_server INTEGER NOT NULL DEFAULT 0;

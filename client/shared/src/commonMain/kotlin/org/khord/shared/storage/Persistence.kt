@@ -30,6 +30,8 @@ internal interface Persistence {
      */
     suspend fun loadIdentity(): IdentityRecord?
     suspend fun saveIdentity(record: IdentityRecord)
+    /** Mark the existing identity row as fully registered with the Key Server. */
+    suspend fun markRegisteredAtServer()
 
     // ── Pre-keys ────────────────────────────────────────────────────────────
 
@@ -101,6 +103,13 @@ internal data class IdentityRecord(
     val keyServerUrl: String,
     val relayServerUrl: String,
     val createdAt: String,
+    /**
+     * Whether the pre-key bundle has been successfully uploaded to the Key
+     * Server. False until Messaging.register's uploadBundle call returns
+     * successfully — used by Messaging.load to detect a partial-registration
+     * crash and recover.
+     */
+    val registeredAtServer: Boolean = false,
 )
 
 internal data class SignedPreKeyRecord(

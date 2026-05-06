@@ -18,7 +18,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  *   `type` field per PROTOCOL.md §10.
  */
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-internal val KhordJson = Json {
+val KhordJson = Json {
     namingStrategy = JsonNamingStrategy.SnakeCase
     encodeDefaults = true
     ignoreUnknownKeys = true
