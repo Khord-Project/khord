@@ -71,14 +71,20 @@ object AppContainer {
     }
 }
 
-/** Hardcoded server URLs for the PoC; emulator-loopback by default. */
+/**
+ * Server URLs for the PoC, sourced from BuildConfig so a developer can
+ * point an APK at any LAN host at build time without touching source:
+ *
+ *     ./gradlew :android:assembleDebug \
+ *         -Pkhord.keyserver.url=http://192.168.1.42:8001 \
+ *         -Pkhord.relayserver.url=http://192.168.1.42:8002
+ *
+ * Defaults (set in :android:build.gradle.kts) are the standard Android
+ * emulator → host loopback `http://10.0.2.2:{8001,8002}`, which is the
+ * right thing for local emulator testing against the Docker compose stack.
+ */
 object ServerUrls {
-    /**
-     * Android emulator loopback to the Docker compose stack on the host.
-     * Real-device testing on a LAN replaces this with `http://<host-LAN>:8001`
-     * etc. (and a different network_security_config entry).
-     */
-    const val KEY_SERVER = "http://10.0.2.2:8001"
-    const val RELAY_SERVER = "http://10.0.2.2:8002"
+    val KEY_SERVER: String = BuildConfig.KEY_SERVER_URL
+    val RELAY_SERVER: String = BuildConfig.RELAY_SERVER_URL
     const val DB_NAME = "khord.db"
 }

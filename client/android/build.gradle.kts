@@ -13,6 +13,19 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1.0"
+
+        // Server URLs are baked into BuildConfig so a developer can point
+        // a build at a real-LAN host without touching source. Defaults are
+        // the standard emulator → host loopback (10.0.2.2). Override with:
+        //   ./gradlew :android:assembleDebug \
+        //     -Pkhord.keyserver.url=http://192.168.1.42:8001 \
+        //     -Pkhord.relayserver.url=http://192.168.1.42:8002
+        val keyServerUrl = (project.findProperty("khord.keyserver.url") as String?)
+            ?: "http://10.0.2.2:8001"
+        val relayServerUrl = (project.findProperty("khord.relayserver.url") as String?)
+            ?: "http://10.0.2.2:8002"
+        buildConfigField("String", "KEY_SERVER_URL", "\"$keyServerUrl\"")
+        buildConfigField("String", "RELAY_SERVER_URL", "\"$relayServerUrl\"")
     }
 
     sourceSets["main"].apply {
@@ -29,6 +42,9 @@ android {
 
     buildFeatures {
         compose = true
+        // AGP 8+ disables BuildConfig generation by default; we re-enable
+        // it so the buildConfigField entries above are usable at runtime.
+        buildConfig = true
     }
 
     compileOptions {

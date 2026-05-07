@@ -16,10 +16,15 @@ actual class DriverFactory actual constructor() {
                 "DriverFactory call."
             )
 
-        // SQLCipher 4.x (net.zetetic.database.sqlcipher) loads its native
-        // library lazily on first SupportFactory use — no explicit init
-        // needed (the 3.x `SQLiteDatabase.loadLibs(context)` API is gone).
-        //
+        // SQLCipher 4.x (net.zetetic:sqlcipher-android) does NOT self-load
+        // libsqlcipher.so — there's no static initializer hook and no
+        // `loadLibs()` API. The canonical load site is KhordApp.onCreate();
+        // calling it again here is a no-op (System.loadLibrary is idempotent
+        // per JLS) but guards against entry points that might bypass the
+        // Application class (instrumented tests, ContentProviders that
+        // touch the DB before onCreate, etc.).
+        System.loadLibrary("sqlcipher")
+
         // SupportOpenHelperFactory takes the passphrase as a ByteArray —
         // bytes-based passphrases avoid char-encoding ambiguity across
         // implementations. SQLCipher zeroes the array after key derivation,

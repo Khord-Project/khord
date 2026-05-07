@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  PoC network policy: cleartext HTTP is permitted ONLY for the Docker
-  Compose stack on the host (10.0.2.2 from emulator). All other domains
-  default to HTTPS-only enforcement.
+  PoC network policy: cleartext HTTP is permitted globally so the app can
+  reach a developer's Docker compose stack at whatever address it happens
+  to live (10.0.2.2 from the emulator, 192.168.x.x on a LAN, etc.) without
+  having to enumerate every reviewer's home IP here.
 
-  Production deployments will replace this entirely with HTTPS-everywhere.
+  TODO(release): TIGHTEN BEFORE ANY PRODUCTION BUILD. Production deploys
+  must replace this with HTTPS-everywhere — either remove this file (the
+  framework default rejects cleartext on API 28+) or scope cleartext to a
+  specific staging-only domain. Shipping a release APK with this config
+  would let any on-path attacker downgrade Khord to plaintext.
 -->
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">10.0.2.2</domain>
-        <domain includeSubdomains="false">localhost</domain>
-        <domain includeSubdomains="false">127.0.0.1</domain>
-    </domain-config>
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
