@@ -1,0 +1,5 @@
+# Real environment file — must never be committed.
+.env
+
+# Backup artifacts produced by scripts/backup.sh.
+backups/

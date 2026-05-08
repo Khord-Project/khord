@@ -1,0 +1,156 @@
+# Khord production deployment.
+#
+# Differences from the dev docker-compose.yml at the repo root:
+#   - Caddy reverse proxy with automatic Let's Encrypt TLS in front of both
+#     services. Caddy is the only container that binds host ports.
+#   - keyserver / relayserver / databases bind no host ports — they're only
+#     reachable on internal Docker networks.
+#   - Restart policy + JSON-file log rotation on every service so a runaway
+#     log volume can't fill the host disk.
+#   - All secrets and tunables come from .env (see .env.example).
+#
+# Run from this directory:
+#
+#   cp .env.example .env
+#   $EDITOR .env                       # fill in domains, secrets, etc.
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Or just run scripts/setup.sh, which automates the .env step.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"            # HTTP/3
+    environment:
+      DOMAIN_KEYSERVER: ${DOMAIN_KEYSERVER}
+      DOMAIN_RELAY: ${DOMAIN_RELAY}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data         # ACME account + certificates
+      - caddy_config:/config     # Caddy's autosaved config
+    networks:
+      - keyserver_net
+      - relayserver_net
+    depends_on:
+      keyserver:
+        condition: service_healthy
+      relayserver:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  keyserver-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: keyserver
+      POSTGRES_PASSWORD: ${KEYSERVER_DB_PASSWORD}
+      POSTGRES_DB: keyserver
+    volumes:
+      - keyserver_db_data:/var/lib/postgresql/data
+    networks:
+      - keyserver_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keyserver -d keyserver"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  keyserver:
+    build:
+      context: ../servers/keyserver
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://keyserver:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/keyserver
+      KEY_SERVER_TOKEN_SECRET: ${KEY_SERVER_TOKEN_SECRET}
+    depends_on:
+      keyserver-db:
+        condition: service_healthy
+    networks:
+      - keyserver_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  relayserver-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: relayserver
+      POSTGRES_PASSWORD: ${RELAYSERVER_DB_PASSWORD}
+      POSTGRES_DB: relayserver
+    volumes:
+      - relayserver_db_data:/var/lib/postgresql/data
+    networks:
+      - relayserver_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relayserver -d relayserver"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  relayserver:
+    build:
+      context: ../servers/relayserver
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relayserver:${RELAYSERVER_DB_PASSWORD}@relayserver-db:5432/relayserver
+      # The .env file uses RELAY_-prefixed names for clarity, but the server
+      # reads the unprefixed pydantic-settings field names. Map them here so
+      # the user-facing config stays namespaced without touching server code.
+      PROOF_OF_WORK_DIFFICULTY_BITS: ${RELAY_PROOF_OF_WORK_DIFFICULTY_BITS:-16}
+      MESSAGE_TTL_SECONDS: ${RELAY_MESSAGE_TTL_SECONDS:-604800}
+    depends_on:
+      relayserver-db:
+        condition: service_healthy
+    networks:
+      - relayserver_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+# Two separate networks. Caddy joins both as the public reverse proxy;
+# the key-server and relay-server pairs do not see each other's traffic.
+# This mirrors the split-trust enforcement of the dev compose file.
+networks:
+  keyserver_net:
+    driver: bridge
+  relayserver_net:
+    driver: bridge
+
+volumes:
+  keyserver_db_data:
+  relayserver_db_data:
+  caddy_data:
+  caddy_config:

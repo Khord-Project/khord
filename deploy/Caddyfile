@@ -1,0 +1,45 @@
+# Khord production reverse proxy.
+#
+# Two server blocks — one per service domain. Both terminate TLS via
+# automatic Let's Encrypt and proxy plain HTTP upstream to the internal
+# service port. Neither the keyserver nor the relayserver bind any host
+# ports themselves; this file is the only public entry point.
+#
+# Domains are passed in as environment variables by docker-compose.prod.yml
+# (DOMAIN_KEYSERVER, DOMAIN_RELAY); the {$VAR} substitution is performed by
+# Caddy at startup.
+
+{$DOMAIN_KEYSERVER} {
+    encode gzip
+    reverse_proxy keyserver:8000
+
+    header {
+        # 1-year HSTS with preload — once a client has visited us they
+        # MUST use HTTPS for a year. `includeSubDomains` is correct for a
+        # service-specific subdomain.
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Block content-type sniffing — the API only ever returns JSON;
+        # there's no reason for a browser to second-guess it.
+        X-Content-Type-Options "nosniff"
+        # Pure API endpoint; should never be embedded in a frame.
+        X-Frame-Options "DENY"
+        # Don't leak referrer info on cross-origin links.
+        Referrer-Policy "no-referrer"
+        # Strip Caddy's default Server: header so we don't advertise the
+        # specific reverse-proxy version in use.
+        -Server
+    }
+}
+
+{$DOMAIN_RELAY} {
+    encode gzip
+    reverse_proxy relayserver:8000
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+}
