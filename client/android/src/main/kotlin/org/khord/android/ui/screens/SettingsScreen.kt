@@ -1,6 +1,8 @@
 package org.khord.android.ui.screens
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -24,7 +26,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,17 +43,12 @@ import org.khord.android.ui.viewmodel.SettingsViewModel
 fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showConfirm by remember { mutableStateOf(false) }
-    val activity = LocalContext.current as? Activity
-
-    LaunchedEffect(state.panicked) {
-        // After a successful panic + AppContainer.reset(), recreate the
-        // hosting Activity. This rebuilds the NavHost from scratch starting
-        // at SplashScreen, which re-runs AppContainer.bootstrap() and routes
-        // to Welcome cleanly. (Just navigating to Welcome would skip the
-        // splash, leaving AppContainer.bootstrap == null and crashing the
-        // first registration attempt with "AppContainer not bootstrapped".)
-        if (state.panicked) activity?.recreate()
-    }
+    // Walk the ContextWrapper chain rather than `as? Activity` — Compose's
+    // LocalContext is sometimes wrapped (theme, configuration), and the
+    // single-cast version silently resolves to null, which made
+    // activity.recreate() a no-op and stranded the user on the Wiping…
+    // spinner forever.
+    val activity = LocalContext.current.findActivity()
 
     Scaffold(topBar = {
         TopAppBar(
@@ -112,12 +108,6 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Panic") }
-
-                state.error?.let {
-                    Text("Error: $it",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall)
-                }
             }
         }
     }
@@ -128,7 +118,11 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
             confirmButton = {
                 TextButton(onClick = {
                     showConfirm = false
-                    vm.panic()
+                    // Callback fires from Main once cleanup completes (or
+                    // throws — see SettingsViewModel.panic kdoc). Activity
+                    // is non-null here because findActivity() unwraps any
+                    // ContextWrapper before returning.
+                    vm.panic { activity?.recreate() }
                 }) { Text("Wipe everything", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
@@ -144,4 +138,21 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
             },
         )
     }
+}
+
+/**
+ * Walk the [ContextWrapper] chain to find the hosting [Activity].
+ *
+ * `LocalContext.current` in a Compose tree is sometimes a theme- or
+ * configuration-wrapped Context, not the Activity itself. A plain
+ * `as? Activity` cast on that wrapper silently yields null, so any code
+ * that depends on the Activity reference (`recreate()`, `startActivity`,
+ * window flags) becomes a no-op. This extension peels wrappers until it
+ * finds the Activity, returning null only if the Context truly isn't
+ * hosted in one (which shouldn't happen in normal Compose usage).
+ */
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
