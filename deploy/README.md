@@ -180,16 +180,74 @@ docker run --rm -v khord_caddy_data:/to -v /tmp:/from alpine \
 - **Server-side log retention beyond 50 MB per service.** If you need
   forensic-grade archives, ship logs to an external sink.
 
+## Coolify Deployment
+
+If you're using [Coolify](https://coolify.io) instead of the standalone
+Caddy stack, use `docker-compose.coolify.yml` — it omits the Caddy
+service because Coolify's Traefik handles reverse proxy and TLS for you.
+
+### Steps
+
+1. **Add a Docker Compose resource in Coolify** pointing at this repo
+   (or a fork). Set the **branch** to whichever you deploy from
+   (`main`, a release tag, etc.).
+2. Set the **Compose file path** to `deploy/docker-compose.coolify.yml`.
+3. Open the resource's **Environment Variables** tab and paste the
+   five values from `.env.coolify.example`:
+   - `KEY_SERVER_TOKEN_SECRET` — `openssl rand -hex 32`
+   - `KEYSERVER_DB_PASSWORD` — `openssl rand -hex 24`
+   - `RELAYSERVER_DB_PASSWORD` — `openssl rand -hex 24`
+   - `RELAY_PROOF_OF_WORK_DIFFICULTY_BITS` — usually `16`
+   - `RELAY_MESSAGE_TTL_SECONDS` — usually `604800`
+
+   These five vars are all that's required — `DATABASE_URL` is
+   constructed inside the compose file from the password vars.
+4. **Deploy.** Coolify builds both server images, brings up both
+   Postgres databases, runs the apps, and routes traffic via Traefik.
+5. **Assign domains.** In Coolify's resource UI, under **Domains**:
+   - `keys.khord.org` (or your equivalent) → service: **`keyserver`**, port: **`8000`**
+   - `relay.khord.org` (or your equivalent) → service: **`relayserver`**, port: **`8000`**
+
+   Coolify obtains TLS certificates automatically.
+
+### Note on port numbers
+
+Both server processes listen on **port 8000** inside their containers
+(see `EXPOSE 8000` and `--port 8000` in the respective Dockerfile
+`CMD`). The dev `docker-compose.yml` and the standalone
+`docker-compose.prod.yml` map those to host ports `8001` and `8002`
+respectively, but Coolify's Traefik routes container-to-container —
+there's no host port — so the routable port for both services is just
+`8000`. Don't get confused by the `8001` / `8002` labels in the dev
+stack; those are dev-host-side conveniences that don't apply here.
+
+### Coolify-vs-standalone trade-offs
+
+| | Standalone (`docker-compose.prod.yml`) | Coolify (`docker-compose.coolify.yml`) |
+|---|---|---|
+| Reverse proxy | Caddy bundled in this directory | Traefik provided by Coolify |
+| TLS | Caddy → Let's Encrypt | Coolify → Let's Encrypt |
+| Configuration | `.env` on the host | Coolify UI environment vars |
+| Logs | `docker compose logs` | Coolify UI logs panel |
+| Backups | `scripts/backup.sh` (still works for the Coolify-hosted DBs — run it from a shell inside Coolify, or copy the script into a Coolify resource) | Same script + Coolify-managed volume backups |
+| Maintenance | Manual `git pull` + `docker compose up -d` | Coolify auto-redeploys on git push if configured |
+
+Choose Coolify if you already run it for other services or want a
+managed UX; choose the standalone stack if you want a zero-dependency
+deployment that's plain Docker + Caddy.
+
 ## Files in this directory
 
 ```
 deploy/
-├── docker-compose.prod.yml   six services + four volumes + two networks
-├── Caddyfile                 reverse proxy config, two server blocks
-├── .env.example              template; copy to .env (gitignored)
-├── .gitignore                excludes .env, backups/
-├── README.md                 you are here
+├── docker-compose.prod.yml      six services + four volumes + two networks (Caddy stack)
+├── docker-compose.coolify.yml   four services + two volumes + two networks (Coolify stack)
+├── Caddyfile                    reverse proxy config for the standalone stack
+├── .env.example                 template for the Caddy stack; copy to .env (gitignored)
+├── .env.coolify.example         checklist of vars to paste into Coolify's UI
+├── .gitignore                   excludes .env, backups/
+├── README.md                    you are here
 └── scripts/
-    ├── setup.sh              interactive first-run bootstrap
-    └── backup.sh             pg_dump both databases, timestamped tarball
+    ├── setup.sh                 interactive first-run bootstrap (Caddy stack only)
+    └── backup.sh                pg_dump both databases, timestamped tarball
 ```

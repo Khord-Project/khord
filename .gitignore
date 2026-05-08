@@ -20,7 +20,10 @@ env/
 # Environment / secrets
 .env
 .env.*
-!.env.example
+# Negate any *.example template — currently .env.example and
+# .env.coolify.example, but future .env.<variant>.example files (one per
+# deployment target) are intended to be committed too.
+!.env*.example
 *.pem
 *.key
 

@@ -1,0 +1,118 @@
+# Khord deployment for Coolify (https://coolify.io).
+#
+# Coolify provides Traefik in front of every service it deploys, including
+# automatic Let's Encrypt TLS termination, so this compose file does NOT
+# include a reverse proxy of its own. Each service listens on its plain
+# HTTP port; Coolify's UI is where you bind domains.
+#
+# Differences from docker-compose.prod.yml (the Caddy-based standalone
+# stack):
+#   - No Caddy service, no Caddyfile, no host port bindings on 80/443.
+#   - keyserver / relayserver use `expose:` (container-to-container only)
+#     so Coolify's Traefik can target them without conflicting with any
+#     other stacks running on the same Coolify host.
+#   - Same split-trust at the network level: each server pair on its own
+#     Docker network, no cross-network reachability.
+#   - Same .env-driven secrets (see .env.coolify.example).
+#
+# Deployment via Coolify UI: see the "Coolify Deployment" section of
+# README.md in this directory.
+
+services:
+  keyserver-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: keyserver
+      POSTGRES_PASSWORD: ${KEYSERVER_DB_PASSWORD}
+      POSTGRES_DB: keyserver
+    volumes:
+      - keyserver_db_data:/var/lib/postgresql/data
+    networks:
+      - keyserver_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keyserver -d keyserver"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keyserver:
+    build:
+      context: ../servers/keyserver
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://keyserver:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/keyserver
+      KEY_SERVER_TOKEN_SECRET: ${KEY_SERVER_TOKEN_SECRET}
+    # No host port binding — Coolify's Traefik routes container-to-container.
+    # The app inside the container listens on 8000 (see ../servers/keyserver/
+    # Dockerfile CMD). When you assign a domain in Coolify's UI, target
+    # this service at port 8000.
+    expose:
+      - "8000"
+    depends_on:
+      keyserver-db:
+        condition: service_healthy
+    networks:
+      - keyserver_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  relayserver-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: relayserver
+      POSTGRES_PASSWORD: ${RELAYSERVER_DB_PASSWORD}
+      POSTGRES_DB: relayserver
+    volumes:
+      - relayserver_db_data:/var/lib/postgresql/data
+    networks:
+      - relayserver_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relayserver -d relayserver"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  relayserver:
+    build:
+      context: ../servers/relayserver
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relayserver:${RELAYSERVER_DB_PASSWORD}@relayserver-db:5432/relayserver
+      # The .env file uses RELAY_-prefixed names for clarity in a
+      # multi-service env, but the relay server's pydantic-settings reads
+      # the unprefixed field names. Rebind here so no server-side code
+      # change is required.
+      PROOF_OF_WORK_DIFFICULTY_BITS: ${RELAY_PROOF_OF_WORK_DIFFICULTY_BITS:-16}
+      MESSAGE_TTL_SECONDS: ${RELAY_MESSAGE_TTL_SECONDS:-604800}
+    # Same comment as keyserver above — Coolify routes via port 8000.
+    expose:
+      - "8000"
+    depends_on:
+      relayserver-db:
+        condition: service_healthy
+    networks:
+      - relayserver_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+# Two separate networks — same split-trust enforcement as the dev and
+# prod stacks. Coolify's Traefik joins each network on demand to route
+# traffic to the corresponding service; the two networks share zero
+# state otherwise.
+networks:
+  keyserver_net:
+    driver: bridge
+  relayserver_net:
+    driver: bridge
+
+volumes:
+  keyserver_db_data:
+  relayserver_db_data:
