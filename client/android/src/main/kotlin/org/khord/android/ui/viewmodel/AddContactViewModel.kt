@@ -12,6 +12,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.khord.android.AppContainer
 import org.khord.shared.protocol.KhordJson
 import org.khord.shared.protocol.wire.QrPayload
@@ -104,7 +105,11 @@ class AddContactViewModel : ViewModel() {
                         firstMessage = firstMessage,
                     )
                     _state.update { it.copy(sending = false) }
-                    onSent(contactFingerprint)
+                    // onSent typically calls NavController.navigate, which
+                    // mutates LifecycleRegistry and asserts main-thread. We
+                    // hop back to Main explicitly because the surrounding
+                    // launch dispatched us to IO for the network/crypto work.
+                    withContext(Dispatchers.Main) { onSent(contactFingerprint) }
                 }.onFailure { e ->
                     _state.update {
                         it.copy(sending = false, error = e.message ?: e::class.simpleName)
