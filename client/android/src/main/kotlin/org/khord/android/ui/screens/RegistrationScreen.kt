@@ -10,12 +10,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
@@ -39,42 +46,7 @@ fun RegistrationScreen(nav: NavController) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (vm != null) {
-            val status by vm.status.collectAsStateWithLifecycle()
-            LaunchedEffect(status) {
-                if (status is OnboardingViewModel.Status.Idle ||
-                    status is OnboardingViewModel.Status.Display
-                ) {
-                    vm.register()
-                }
-                if (status is OnboardingViewModel.Status.Done) {
-                    AppContainer.onboardingViewModel = null
-                    nav.navigate(Routes.CONTACTS) {
-                        popUpTo(Routes.WELCOME) { inclusive = true }
-                    }
-                }
-            }
-
-            Text("Registering identity", style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.height(16.dp))
-            when (val s = status) {
-                is OnboardingViewModel.Status.Generating -> Text("Generating phrase…")
-                is OnboardingViewModel.Status.Display -> Text("Phrase ready, registering…")
-                is OnboardingViewModel.Status.Registering -> {
-                    Text("Deriving keys + uploading bundle…")
-                    Spacer(Modifier.height(16.dp))
-                    CircularProgressIndicator()
-                }
-                is OnboardingViewModel.Status.Done -> Text("Done")
-                is OnboardingViewModel.Status.Failed -> {
-                    Text("Registration failed: ${s.message}",
-                        color = MaterialTheme.colorScheme.error)
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = { vm.register() }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Retry")
-                    }
-                }
-                else -> CircularProgressIndicator()
-            }
+            FreshOnboardingBody(vm = vm, nav = nav)
         } else if (recoveryMessaging != null) {
             // We were here mid-registration last time; finish it.
             LaunchedEffect(Unit) {
@@ -92,6 +64,79 @@ fun RegistrationScreen(nav: NavController) {
             Text("Registration state lost.")
             Spacer(Modifier.height(16.dp))
             Button(onClick = { nav.navigate(Routes.WELCOME) }) { Text("Start over") }
+        }
+    }
+}
+
+@Composable
+private fun FreshOnboardingBody(vm: OnboardingViewModel, nav: NavController) {
+    val status by vm.status.collectAsStateWithLifecycle()
+    var displayNameInput by remember { mutableStateOf("") }
+
+    LaunchedEffect(status) {
+        if (status is OnboardingViewModel.Status.Done) {
+            AppContainer.onboardingViewModel = null
+            nav.navigate(Routes.CONTACTS) {
+                popUpTo(Routes.WELCOME) { inclusive = true }
+            }
+        }
+    }
+
+    when (val s = status) {
+        is OnboardingViewModel.Status.Idle,
+        is OnboardingViewModel.Status.Display -> {
+            // Pre-register prompt — let the user pick a display name.
+            Text("Almost done", style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "What should contacts call you?",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Optional. If you skip this, your contacts will see " +
+                    "\"Anonymous\" until you set a name later.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = displayNameInput,
+                onValueChange = { displayNameInput = it.take(64) },
+                label = { Text("Display name") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Done,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = {
+                    vm.setDisplayName(displayNameInput)
+                    vm.register()
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Continue") }
+        }
+        is OnboardingViewModel.Status.Generating -> {
+            Text("Generating phrase…")
+        }
+        is OnboardingViewModel.Status.Registering -> {
+            Text("Deriving keys + uploading bundle…",
+                style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(16.dp))
+            CircularProgressIndicator()
+        }
+        is OnboardingViewModel.Status.Done -> Text("Done")
+        is OnboardingViewModel.Status.Failed -> {
+            Text("Registration failed: ${s.message}",
+                color = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = { vm.register() }, modifier = Modifier.fillMaxWidth()) {
+                Text("Retry")
+            }
         }
     }
 }

@@ -4,20 +4,28 @@ CREATE TABLE contact (
     key_server_url     TEXT NOT NULL,
     relay_server_url   TEXT NOT NULL,
     contact_mailbox    TEXT NOT NULL,
-    stored_at          TEXT NOT NULL
+    stored_at          TEXT NOT NULL,
+    -- Display name learned from the contact's encrypted reply_info field.
+    -- Empty string until the first message in either direction lands and
+    -- carries reply_info; QR scans alone don't set this (the QR doesn't
+    -- include display name to keep the QR wire format unchanged).
+    display_name       TEXT NOT NULL DEFAULT ''
 );
 
 upsertContact:
 INSERT OR REPLACE INTO contact(
     fingerprint, ed25519_public, key_server_url, relay_server_url,
-    contact_mailbox, stored_at
-) VALUES (?, ?, ?, ?, ?, ?);
+    contact_mailbox, stored_at, display_name
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 
 selectContactByFingerprint:
 SELECT * FROM contact WHERE fingerprint = ?;
 
 selectAllContacts:
 SELECT * FROM contact;
+
+updateContactDisplayName:
+UPDATE contact SET display_name = ? WHERE fingerprint = ?;
 
 deleteContact:
 DELETE FROM contact WHERE fingerprint = ?;

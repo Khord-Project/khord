@@ -14,7 +14,7 @@ internal class InMemoryPersistence : Persistence {
     private var identity: IdentityRecord? = null
     private var spk: SignedPreKeyRecord? = null
     private val opks = mutableMapOf<Int, ByteArray>()
-    private val contacts = mutableMapOf<String, QrPayload>()
+    private val contacts = mutableMapOf<String, ContactInfo>()
     private val pendingMailboxes = mutableMapOf<String, String>()
     private val sessions = mutableMapOf<String, SessionRecord>()
     private val messages = mutableListOf<Pair<String, StoredMessage>>()
@@ -25,6 +25,9 @@ internal class InMemoryPersistence : Persistence {
     override suspend fun saveIdentity(record: IdentityRecord) { identity = record }
     override suspend fun markRegisteredAtServer() {
         identity = identity?.copy(registeredAtServer = true)
+    }
+    override suspend fun updateMyDisplayName(displayName: String) {
+        identity = identity?.copy(displayName = displayName)
     }
 
     override suspend fun saveSignedPreKey(record: SignedPreKeyRecord) { spk = record }
@@ -37,9 +40,14 @@ internal class InMemoryPersistence : Persistence {
         opks.mapValues { it.value.copyOf() }
     override suspend fun deleteOneTimePreKey(keyId: Int) { opks.remove(keyId) }
 
-    override suspend fun saveContact(qr: QrPayload) { contacts[qr.fingerprint] = qr }
-    override suspend fun loadContact(fingerprint: String): QrPayload? = contacts[fingerprint]
-    override suspend fun loadAllContacts(): List<QrPayload> = contacts.values.toList()
+    override suspend fun saveContact(qr: QrPayload, displayName: String) {
+        contacts[qr.fingerprint] = ContactInfo(qr, displayName)
+    }
+    override suspend fun loadContact(fingerprint: String): ContactInfo? = contacts[fingerprint]
+    override suspend fun loadAllContacts(): List<ContactInfo> = contacts.values.toList()
+    override suspend fun updateContactDisplayName(fingerprint: String, displayName: String) {
+        contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(displayName = displayName) }
+    }
 
     override suspend fun savePendingMailbox(mailboxId: String, bearerToken: String) {
         pendingMailboxes[mailboxId] = bearerToken

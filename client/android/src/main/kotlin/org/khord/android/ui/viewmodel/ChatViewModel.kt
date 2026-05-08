@@ -24,6 +24,8 @@ class ChatViewModel(
         val messages: List<MessageEntry> = emptyList(),
         val sending: Boolean = false,
         val error: String? = null,
+        /** Display name learned from the contact's reply_info, or null if unknown yet. */
+        val contactDisplayName: String? = null,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -78,7 +80,8 @@ class ChatViewModel(
     private suspend fun reloadHistoryLocked() {
         val messaging = AppContainer.messaging ?: return
         val history = messaging.messageHistory(contactFingerprint)
-        _state.update { it.copy(messages = history) }
+        val name = messaging.contactDisplayName(contactFingerprint)
+        _state.update { it.copy(messages = history, contactDisplayName = name) }
     }
 
     private suspend fun fetchOnce() {

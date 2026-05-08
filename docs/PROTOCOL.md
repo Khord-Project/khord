@@ -530,11 +530,24 @@ Inside the Double Ratchet encrypted envelope, the plaintext message uses this fo
   "version": 1,
   "type": "text",
   "timestamp": "<ISO 8601, client-generated>",
-  "body": "<message text>"
+  "body": "<message text>",
+  "reply_info": {
+    "mailbox":      "<sender's inbound mailbox ID for replies>",
+    "relay_server": "<sender's relay-server base URL>",
+    "key_server":   "<sender's key-server base URL>",
+    "fingerprint":  "<sender's identity fingerprint, hex sha256(ik)>",
+    "display_name": "<sender's chosen display name (or 'Anonymous')>"
+  }
 }
 ```
 
 **Type field is mandatory** for forward compatibility. Unknown types must be handled gracefully by the client (display "unsupported message type" rather than crash).
+
+**`reply_info` is REQUIRED on the X3DH initial** (`x3dh_initial` envelope, §10.2). Without it the recipient cannot auto-create the sender's contact entry and falls back to the legacy "received from unknown fingerprint" error — which forces a bidirectional QR scan that we explicitly want to avoid. See §10.2.
+
+`reply_info` SHOULD also be included on subsequent `ratchet` messages so display-name renames and relay-server migrations propagate without an out-of-band channel. Khord's reference implementation includes it on every outbound message; the cost (~150 bytes) is dwarfed by the AEAD framing overhead, and recipients no-op when nothing changed.
+
+**Privacy boundary.** `reply_info` lives **inside the AEAD ciphertext**, not in the outer wire envelope (§10). The relay server therefore never sees mailbox addresses, server URLs, fingerprints, or display names — they are end-to-end encrypted alongside the message body. Only the intended recipient learns them, after decryption.
 
 Future types (not in PoC):
 - `media_reference` — symmetric key + download URL for encrypted media
@@ -612,6 +625,17 @@ agreement. The receiver runs `X3dh.respond` with their stored SPK + OPK
 secrets to derive SK, initialises the ratchet, and decrypts the inner
 payload (§8). The OPK private key MUST be deleted on successful X3DH
 (X3DH §3.4 — forward-secrecy hard requirement).
+
+**Unidirectional contact flow.** The decrypted inner payload of an
+`x3dh_initial` MUST carry `reply_info` (§8). The receiver uses it to
+auto-create a contact entry for the sender — Alice's mailbox + relay
+server + key server + fingerprint + display name all come from there.
+This means **one QR scan is enough to start a conversation**: only
+Alice scans Bob's QR; Bob receives Alice's first message and learns
+everything he needs to reply, without scanning Alice's QR. An `x3dh_initial`
+without `reply_info` is treated as a legacy / older-client message and
+the receiver returns a wire-format error to force the caller to fall back
+to a bidirectional QR exchange.
 
 ### 10.3 `ratchet` — every subsequent message
 

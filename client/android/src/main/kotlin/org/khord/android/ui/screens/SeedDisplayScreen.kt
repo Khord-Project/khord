@@ -14,11 +14,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,6 +44,7 @@ import org.khord.android.nav.Routes
 import org.khord.android.ui.viewmodel.OnboardingViewModel
 import org.khord.android.util.SecureClipboard
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SeedDisplayScreen(nav: NavController) {
     SecureScreen()
@@ -51,26 +59,38 @@ fun SeedDisplayScreen(nav: NavController) {
         if (status is OnboardingViewModel.Status.Idle) vm.generate()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp)
-            .verticalScroll(rememberScrollState()),
-    ) {
-        Text("Recovery phrase", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Write these 12 words down — in order — somewhere only you can read. " +
-                "They are the only way to recover this account.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Spacer(Modifier.height(16.dp))
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Recovery phrase") },
+                navigationIcon = {
+                    IconButton(onClick = { nav.popBackStack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                "Write these 12 words down — in order — somewhere only you can read. " +
+                    "They are the only way to recover this account.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(16.dp))
 
-        when (val s = status) {
-            is OnboardingViewModel.Status.Display -> SeedBody(s.words, nav)
-            is OnboardingViewModel.Status.Failed ->
-                Text("Failed to generate phrase: ${s.message}")
-            else -> Text("Generating…")
+            when (val s = status) {
+                is OnboardingViewModel.Status.Display -> SeedBody(s.words, nav)
+                is OnboardingViewModel.Status.Failed ->
+                    Text("Failed to generate phrase: ${s.message}")
+                else -> Text("Generating…")
+            }
         }
     }
 }

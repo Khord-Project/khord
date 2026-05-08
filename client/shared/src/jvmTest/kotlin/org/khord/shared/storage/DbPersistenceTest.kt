@@ -108,10 +108,14 @@ class DbPersistenceTest {
                 relayServer = "https://rs",
                 relayMailbox = "mailbox-id-22-chars-zzzz",
             )
-            p.saveContact(qr)
+            p.saveContact(qr, displayName = "Bob")
             val loaded = p.loadContact(qr.fingerprint)!!
-            assertEquals(qr.fingerprint, loaded.fingerprint)
-            assertEquals(qr.relayMailbox, loaded.relayMailbox)
+            assertEquals(qr.fingerprint, loaded.qr.fingerprint)
+            assertEquals(qr.relayMailbox, loaded.qr.relayMailbox)
+            assertEquals("Bob", loaded.displayName)
+
+            p.updateContactDisplayName(qr.fingerprint, "Bob (renamed)")
+            assertEquals("Bob (renamed)", p.loadContact(qr.fingerprint)!!.displayName)
 
             p.savePendingMailbox("mid-1", "tok-1")
             assertEquals(mapOf("mid-1" to "tok-1"), p.loadPendingMailboxes())

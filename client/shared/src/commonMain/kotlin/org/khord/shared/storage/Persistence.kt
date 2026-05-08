@@ -32,6 +32,8 @@ internal interface Persistence {
     suspend fun saveIdentity(record: IdentityRecord)
     /** Mark the existing identity row as fully registered with the Key Server. */
     suspend fun markRegisteredAtServer()
+    /** Update only the display name on the existing identity row. */
+    suspend fun updateMyDisplayName(displayName: String)
 
     // ── Pre-keys ────────────────────────────────────────────────────────────
 
@@ -46,9 +48,10 @@ internal interface Persistence {
 
     // ── Contacts ────────────────────────────────────────────────────────────
 
-    suspend fun saveContact(qr: QrPayload)
-    suspend fun loadContact(fingerprint: String): QrPayload?
-    suspend fun loadAllContacts(): List<QrPayload>
+    suspend fun saveContact(qr: QrPayload, displayName: String = "")
+    suspend fun loadContact(fingerprint: String): ContactInfo?
+    suspend fun loadAllContacts(): List<ContactInfo>
+    suspend fun updateContactDisplayName(fingerprint: String, displayName: String)
 
     // ── Pending mailboxes ───────────────────────────────────────────────────
 
@@ -110,6 +113,23 @@ internal data class IdentityRecord(
      * crash and recover.
      */
     val registeredAtServer: Boolean = false,
+    /**
+     * User's chosen display name (PROTOCOL.md §8). Sent inside the
+     * encrypted `reply_info` block of every outbound message so contacts
+     * can show it instead of the bare fingerprint. Defaults to "Anonymous"
+     * if the user skipped the optional onboarding prompt.
+     */
+    val displayName: String = "Anonymous",
+)
+
+/**
+ * Stored contact = wire QR + a learned display name. Display name lives
+ * outside the QR (the QR JSON is unchanged) because we learn names from
+ * the encrypted `reply_info` field, not from the public QR code.
+ */
+internal data class ContactInfo(
+    val qr: QrPayload,
+    val displayName: String,
 )
 
 internal data class SignedPreKeyRecord(

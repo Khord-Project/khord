@@ -1,0 +1,7 @@
+-- Migration from schema version 2 to 3.
+-- Adds display names for the local user and for stored contacts so the
+-- UI can show human-readable labels instead of fingerprints. New columns
+-- default to "Anonymous" / "" so existing rows migrate cleanly without
+-- the orchestrator having to backfill them.
+ALTER TABLE identity ADD COLUMN display_name TEXT NOT NULL DEFAULT 'Anonymous';
+ALTER TABLE contact  ADD COLUMN display_name TEXT NOT NULL DEFAULT '';

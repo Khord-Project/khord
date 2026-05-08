@@ -70,6 +70,21 @@ class OnboardingViewModel : ViewModel() {
      */
     private var confirmIndices: List<Int> = ConfirmIndices.pick()
 
+    /**
+     * User's chosen display name. Optional — if the user skips the prompt
+     * we register as "Anonymous". Trimmed and capped to 64 chars to avoid
+     * silly inputs filling the reply_info block on every message.
+     */
+    @Volatile
+    private var displayName: String = "Anonymous"
+
+    fun setDisplayName(name: String) {
+        val trimmed = name.trim().take(64)
+        displayName = if (trimmed.isEmpty()) "Anonymous" else trimmed
+    }
+
+    fun currentDisplayName(): String = displayName
+
     fun generate() {
         viewModelScope.launch(Dispatchers.IO) {
             _status.value = Status.Generating
@@ -119,6 +134,7 @@ class OnboardingViewModel : ViewModel() {
                     identity = identity,
                     keyServerUrl = ServerUrls.KEY_SERVER,
                     relayServerUrl = ServerUrls.RELAY_SERVER,
+                    displayName = displayName,
                 )
                 AppContainer.messaging = messaging
                 messaging.register(opkBatchSize = 50)

@@ -7,10 +7,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +33,7 @@ import org.khord.android.AppContainer
 import org.khord.android.nav.Routes
 import org.khord.android.ui.viewmodel.OnboardingViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SeedConfirmScreen(nav: NavController) {
     SecureScreen()
@@ -40,11 +48,21 @@ fun SeedConfirmScreen(nav: NavController) {
     var inputs by remember { mutableStateOf(List(indices.size) { "" }) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Confirm your phrase") },
+                navigationIcon = {
+                    IconButton(onClick = { nav.popBackStack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { padding ->
     Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
+        modifier = Modifier.padding(padding).fillMaxSize().padding(20.dp),
     ) {
-        Text("Confirm your phrase", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(8.dp))
         Text(
             "Type the words at positions ${indices.map { it + 1 }.joinToString(", ")} " +
                 "to confirm you've recorded the phrase.",
@@ -86,5 +104,6 @@ fun SeedConfirmScreen(nav: NavController) {
             },
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Confirm and register") }
+    }
     }
 }

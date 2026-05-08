@@ -50,6 +50,7 @@ internal class DbPersistence(
             relayServerUrl = row.relay_server_url,
             createdAt = row.created_at,
             registeredAtServer = row.registered_at_server != 0L,
+            displayName = row.display_name,
         )
     }
 
@@ -64,11 +65,16 @@ internal class DbPersistence(
             relay_server_url = record.relayServerUrl,
             created_at = record.createdAt,
             registered_at_server = if (record.registeredAtServer) 1L else 0L,
+            display_name = record.displayName,
         )
     }
 
     override suspend fun markRegisteredAtServer() {
         db.identityQueries.markRegisteredAtServer()
+    }
+
+    override suspend fun updateMyDisplayName(displayName: String) {
+        db.identityQueries.updateDisplayName(displayName)
     }
 
     // ── Pre-keys ────────────────────────────────────────────────────────────
@@ -108,7 +114,7 @@ internal class DbPersistence(
 
     // ── Contacts ────────────────────────────────────────────────────────────
 
-    override suspend fun saveContact(qr: QrPayload) {
+    override suspend fun saveContact(qr: QrPayload, displayName: String) {
         db.contactQueries.upsertContact(
             fingerprint = qr.fingerprint,
             ed25519_public = identityKeyBase64ToBytes(qr.identityKey),
@@ -116,21 +122,32 @@ internal class DbPersistence(
             relay_server_url = qr.relayServer,
             contact_mailbox = qr.relayMailbox,
             stored_at = now(),
+            display_name = displayName,
         )
     }
 
-    override suspend fun loadContact(fingerprint: String): QrPayload? {
+    override suspend fun loadContact(fingerprint: String): ContactInfo? {
         val row = db.contactQueries
             .selectContactByFingerprint(fingerprint).executeAsOneOrNull() ?: return null
-        return rowToQr(row.fingerprint, row.ed25519_public, row.key_server_url,
-                       row.relay_server_url, row.contact_mailbox)
+        return ContactInfo(
+            qr = rowToQr(row.fingerprint, row.ed25519_public, row.key_server_url,
+                         row.relay_server_url, row.contact_mailbox),
+            displayName = row.display_name,
+        )
     }
 
-    override suspend fun loadAllContacts(): List<QrPayload> =
+    override suspend fun loadAllContacts(): List<ContactInfo> =
         db.contactQueries.selectAllContacts().executeAsList().map {
-            rowToQr(it.fingerprint, it.ed25519_public, it.key_server_url,
-                    it.relay_server_url, it.contact_mailbox)
+            ContactInfo(
+                qr = rowToQr(it.fingerprint, it.ed25519_public, it.key_server_url,
+                             it.relay_server_url, it.contact_mailbox),
+                displayName = it.display_name,
+            )
         }
+
+    override suspend fun updateContactDisplayName(fingerprint: String, displayName: String) {
+        db.contactQueries.updateContactDisplayName(displayName, fingerprint)
+    }
 
     private fun rowToQr(
         fingerprint: String, ed25519: ByteArray, ks: String, rs: String, mailbox: String,

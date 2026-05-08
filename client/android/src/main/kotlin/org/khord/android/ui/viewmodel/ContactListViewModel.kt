@@ -46,9 +46,16 @@ class ContactListViewModel : ViewModel() {
                     val rows = messaging.contacts().map { contact ->
                         val history = messaging.messageHistory(contact.contactFingerprint)
                         val last = history.lastOrNull()
+                        val name = messaging.contactDisplayName(contact.contactFingerprint)
+                        // Display name when known; otherwise a truncated FP so the
+                        // row still has something distinguishable. Names show up
+                        // after the first message (carries reply_info); QR-only
+                        // contacts before any messaging stay on the FP fallback.
+                        val label = name ?: (contact.contactFingerprint.take(8) +
+                            "…" + contact.contactFingerprint.takeLast(8))
                         Row(
                             fingerprint = contact.contactFingerprint,
-                            displayLabel = contact.contactFingerprint.take(10) + "…",
+                            displayLabel = label,
                             lastMessageBody = last?.body,
                             lastTimestamp = last?.timestamp,
                         )

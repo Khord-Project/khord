@@ -15,8 +15,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -68,9 +72,26 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
 
     Scaffold(
         topBar = {
-            TopAppBar(title = {
-                Text("…${contactFingerprint.takeLast(8)}")
-            })
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { nav.popBackStack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                title = {
+                    Column {
+                        Text(
+                            state.contactDisplayName ?: "Unknown contact",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            "${contactFingerprint.take(8)}…${contactFingerprint.takeLast(8)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+            )
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {

@@ -50,9 +50,14 @@ class InMemoryPersistenceTest {
             relayServer = "https://rs",
             relayMailbox = "mailbox-id-22-chars-aaaa",
         )
-        p.saveContact(qr)
-        assertEquals(qr, p.loadContact("0".repeat(64)))
+        p.saveContact(qr, displayName = "Alice")
+        val loaded = p.loadContact("0".repeat(64))!!
+        assertEquals(qr, loaded.qr)
+        assertEquals("Alice", loaded.displayName)
         assertEquals(1, p.loadAllContacts().size)
+
+        p.updateContactDisplayName("0".repeat(64), "Renamed")
+        assertEquals("Renamed", p.loadContact("0".repeat(64))!!.displayName)
     }
 
     @Test

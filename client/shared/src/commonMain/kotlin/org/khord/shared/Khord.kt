@@ -65,12 +65,14 @@ class KhordBootstrap internal constructor(
         identity: IdentityKey,
         keyServerUrl: String,
         relayServerUrl: String,
+        displayName: String = "Anonymous",
     ): Messaging = Messaging.createWithPersistence(
         identity = identity,
         keyServerUrl = keyServerUrl,
         relayServerUrl = relayServerUrl,
         http = http,
         persistence = persistence,
+        displayName = displayName,
     )
 
     suspend fun close() { persistence.close() }

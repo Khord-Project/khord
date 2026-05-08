@@ -74,20 +74,27 @@ class EndToEndIntegrationTest {
 
         val aliceHttp = khordHttpClient(Java)
         val bobHttp = khordHttpClient(Java)
-        val alice = Messaging.create(aliceIdentity, keyServerUrl, relayServerUrl, aliceHttp)
-        val bob = Messaging.create(bobIdentity, keyServerUrl, relayServerUrl, bobHttp)
+        val alice = Messaging.create(
+            aliceIdentity, keyServerUrl, relayServerUrl, aliceHttp,
+            displayName = "Alice",
+        )
+        val bob = Messaging.create(
+            bobIdentity, keyServerUrl, relayServerUrl, bobHttp,
+            displayName = "Bob",
+        )
 
         // Both register pre-key bundles on the Key Server.
         alice.register(opkBatchSize = 5)
         bob.register(opkBatchSize = 5)
         assertEquals(5, bob.opkSecretCount, "Bob has all 5 OPKs initially")
 
-        // Out-of-band QR exchange. Both QRs are minted simultaneously when the
-        // parties meet; both clients learn the OTHER party's QR.
+        // Unidirectional QR exchange — ONLY Alice scans Bob's QR. Bob does
+        // NOT pre-store Alice's QR; the orchestrator must auto-create Alice's
+        // contact entry from the encrypted reply_info on the X3DH initial.
         val bobQr = bob.myQrPayload()
         val aliceQr = alice.myQrPayload()
         alice.storeContact(bobQr)
-        bob.storeContact(aliceQr)
+        // bob.storeContact(aliceQr)  // ← intentionally NOT called
 
         // 1. Alice initiates. She passes the mailbox-id from HER OWN QR
         //    (the one she gave Bob) so Bob's replies land there.
@@ -98,11 +105,17 @@ class EndToEndIntegrationTest {
         )
 
         // 2. Bob polls his pending mailboxes — picks up the X3dhInitial,
-        //    runs X3DH respond, decrypts, returns the established session.
+        //    runs X3DH respond, decrypts, AUTO-CREATES the Alice contact
+        //    from reply_info, and returns the established session.
         val newContacts = bob.pollPendingMailboxes()
         assertEquals(1, newContacts.size, "Bob expected exactly one new contact")
         val (bobContact, helloBob) = newContacts[0].session to newContacts[0].firstMessage
         assertEquals("Hello Bob", helloBob)
+        assertEquals(
+            "Alice",
+            bob.contactDisplayName(bobContact.contactFingerprint),
+            "Bob should have learned Alice's display name from reply_info",
+        )
 
         // OPK forward-secrecy invariant: Alice's X3DH consumed Bob's OPK,
         // so Bob's local secret store has dropped one entry.
@@ -163,19 +176,22 @@ class EndToEndIntegrationTest {
             val bobPersist = org.khord.shared.storage.openDbPersistence(bobDb, bobKs)
 
             val alice = org.khord.shared.protocol.orchestrator.Messaging.createWithPersistence(
-                aliceIdentity, keyServerUrl, relayServerUrl, aliceHttp, alicePersist
+                aliceIdentity, keyServerUrl, relayServerUrl, aliceHttp, alicePersist,
+                displayName = "Alice",
             )
             val bob = org.khord.shared.protocol.orchestrator.Messaging.createWithPersistence(
-                bobIdentity, keyServerUrl, relayServerUrl, bobHttp, bobPersist
+                bobIdentity, keyServerUrl, relayServerUrl, bobHttp, bobPersist,
+                displayName = "Bob",
             )
 
             alice.register(opkBatchSize = 5)
             bob.register(opkBatchSize = 5)
 
+            // Same unidirectional QR exchange as the e2e test: only Alice scans Bob.
             val bobQr = bob.myQrPayload()
             val aliceQr = alice.myQrPayload()
             alice.storeContact(bobQr)
-            bob.storeContact(aliceQr)
+            // bob.storeContact(aliceQr)  // ← intentionally omitted; auto-created on receive
 
             val aliceContact = alice.initiateContact(
                 contactFingerprint = bobQr.fingerprint,

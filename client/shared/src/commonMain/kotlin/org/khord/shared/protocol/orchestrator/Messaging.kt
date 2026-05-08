@@ -25,8 +25,10 @@ import org.khord.shared.protocol.wire.BundleUploadRequest
 import org.khord.shared.protocol.wire.InnerPayload
 import org.khord.shared.protocol.wire.OneTimePreKeyDto
 import org.khord.shared.protocol.wire.QrPayload
+import org.khord.shared.protocol.wire.ReplyInfo
 import org.khord.shared.protocol.wire.SignedPreKeyDto
 import org.khord.shared.protocol.wire.WireEnvelope
+import org.khord.shared.storage.ContactInfo
 
 /**
  * High-level Khord messaging — what app code interacts with.
@@ -54,6 +56,13 @@ class Messaging internal constructor(
     private val relayServerUrl: String,
     private val http: HttpClient,
     private val persistence: org.khord.shared.storage.Persistence,
+    /**
+     * User's chosen display name. Embedded in `reply_info` on every
+     * outbound message so contacts learn it without out-of-band exchange.
+     * Default "Anonymous" matches the schema default — used when the user
+     * skipped the optional onboarding prompt.
+     */
+    private var displayName: String = "Anonymous",
 ) {
 
     private val ksClient = KeyServerClient(http, keyServerUrl)
@@ -70,8 +79,18 @@ class Messaging internal constructor(
         check(!panicked) { "Messaging instance is dead — panic() was called; construct a new one" }
     }
 
-    /** Contacts the user has scanned QR codes for, keyed by their fingerprint. */
-    private val contactsByFingerprint = mutableMapOf<String, QrPayload>()
+    /**
+     * Stored contacts keyed by fingerprint. Holds the QR coordinates plus a
+     * (possibly empty) display name learned from the contact's encrypted
+     * `reply_info`. Updated when:
+     *   - the user explicitly scans a QR via [storeContact]
+     *   - the orchestrator auto-creates an entry when an unknown party's
+     *     X3DH initial lands and reply_info is parseable (replaces the
+     *     legacy bidirectional-QR requirement)
+     *   - a subsequent inbound payload's reply_info reports a different
+     *     display name (self-healing rename)
+     */
+    private val contactsByFingerprint = mutableMapOf<String, ContactInfo>()
 
     /** Per-contact running session, keyed by the inbound mailbox hosting it. */
     private val sessionsByInboundMailbox = mutableMapOf<String, ContactSession>()
@@ -139,6 +158,7 @@ class Messaging internal constructor(
                 keyServerUrl = keyServerUrl,
                 relayServerUrl = relayServerUrl,
                 createdAt = kotlinx.datetime.Clock.System.now().toString(),
+                displayName = displayName,
             )
         )
         persistence.saveSignedPreKey(
@@ -257,12 +277,33 @@ class Messaging internal constructor(
      */
     data class NewContact(val session: ContactSession, val firstMessage: String)
 
-    /** Persist a contact's QR (called after scanning the QR out-of-band). */
+    /**
+     * Persist a contact's QR (called after scanning the QR out-of-band).
+     * Display name is empty here — the QR doesn't carry it. We learn the
+     * display name later from the contact's encrypted reply_info on first
+     * message receipt.
+     */
     suspend fun storeContact(contactQr: QrPayload) {
         checkAlive()
-        contactsByFingerprint[contactQr.fingerprint] = contactQr
-        persistence.saveContact(contactQr)
+        val existing = contactsByFingerprint[contactQr.fingerprint]
+        val info = ContactInfo(qr = contactQr, displayName = existing?.displayName ?: "")
+        contactsByFingerprint[contactQr.fingerprint] = info
+        persistence.saveContact(contactQr, info.displayName)
     }
+
+    /** Update my own display name (persisted; used in subsequent reply_info). */
+    suspend fun updateMyDisplayName(name: String) {
+        checkAlive()
+        displayName = name
+        persistence.updateMyDisplayName(name)
+    }
+
+    /** This user's chosen display name (or "Anonymous"). */
+    val myDisplayName: String get() = displayName
+
+    /** Display name learned for a contact, or null if we haven't learned one yet. */
+    fun contactDisplayName(fingerprint: String): String? =
+        contactsByFingerprint[fingerprint]?.displayName?.takeIf { it.isNotEmpty() }
 
     /**
      * Initiate an X3DH session with `contactFingerprint` and send the first
@@ -289,8 +330,9 @@ class Messaging internal constructor(
                 "first and pass the same mailbox you shared with this contact"
             )
 
-        val contactQr = contactsByFingerprint[contactFingerprint]
+        val contactInfo = contactsByFingerprint[contactFingerprint]
             ?: throw IllegalStateException("contact not stored: $contactFingerprint")
+        val contactQr = contactInfo.qr
 
         // Sanity: the QR's identity key really hashes to the claimed fingerprint.
         val contactIdEd = Base64Std.decode(contactQr.identityKey)
@@ -329,13 +371,23 @@ class Messaging internal constructor(
             throw ProtocolError.BadSignedPreKey()
         }
 
-        // Init my ratchet, encrypt the first inner payload.
+        // Init my ratchet, encrypt the first inner payload (X3DH initial).
+        // reply_info is REQUIRED on this message — without it, Bob can't
+        // auto-create the Alice-contact entry and the legacy "received from
+        // unknown fingerprint" error would force a bidirectional QR scan.
         val session = Session.fromInitiator(initOut, cryptoBundle.signedPreKey.publicKey)
         val firstMessageTimestamp = Clock.System.now().toString()
         val payload = InnerPayload(
             type = "text",
             timestamp = firstMessageTimestamp,
             body = firstMessage,
+            replyInfo = ReplyInfo(
+                mailbox = myInboundMailboxId,
+                relayServer = relayServerUrl,
+                keyServer = keyServerUrl,
+                fingerprint = identity.fingerprint,
+                displayName = displayName,
+            ),
         )
         val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
             .encodeToByteArray()
@@ -401,12 +453,6 @@ class Messaging internal constructor(
         val ekA = Base64Std.decode(envelope.ekA)
         val initiatorFp = identityFingerprint(ikA)
 
-        val storedQr = contactsByFingerprint[initiatorFp]
-            ?: throw IllegalStateException(
-                "received X3DH initial from unknown fingerprint $initiatorFp — " +
-                "caller must storeContact() the QR before first receive"
-            )
-
         // Look up this side's secrets by ID.
         val mySpkSecret = spkSecret
             ?: throw IllegalStateException("not registered — call register() first")
@@ -450,11 +496,35 @@ class Messaging internal constructor(
         )
         val text = decodeInnerPayloadText(payload)
 
+        // Auto-create the contact from reply_info — replaces the legacy
+        // "caller must storeContact() before first receive" prerequisite.
+        // This is the unidirectional-flow fix: one QR scan suffices.
+        val replyInfo = payload.replyInfo
+            ?: throw ProtocolError.WireFormatError(
+                "X3DH initial from $initiatorFp missing reply_info — " +
+                "older sender (pre-display-name protocol)? legacy bidirectional " +
+                "QR exchange required as fallback"
+            )
+        require(replyInfo.fingerprint == initiatorFp) {
+            "reply_info.fingerprint ${replyInfo.fingerprint} does not match " +
+            "envelope.ik_a hash $initiatorFp"
+        }
+        val autoCreatedQr = QrPayload(
+            identityKey = envelope.ikA,
+            fingerprint = initiatorFp,
+            keyServer = replyInfo.keyServer,
+            relayServer = replyInfo.relayServer,
+            relayMailbox = replyInfo.mailbox,
+        )
+        contactsByFingerprint[initiatorFp] =
+            ContactInfo(autoCreatedQr, replyInfo.displayName)
+        persistence.saveContact(autoCreatedQr, replyInfo.displayName)
+
         val contactSession = ContactSession(
             contactIdentityKey = ikA,
             contactFingerprint = initiatorFp,
-            outboundMailboxId = storedQr.relayMailbox,
-            outboundRelayServer = storedQr.relayServer,
+            outboundMailboxId = autoCreatedQr.relayMailbox,
+            outboundRelayServer = autoCreatedQr.relayServer,
             inboundMailboxId = myInboundMailbox,
             inboundBearerToken = bearerTokenForMailbox,
             session = session,
@@ -468,7 +538,22 @@ class Messaging internal constructor(
     suspend fun sendMessage(contact: ContactSession, text: String): Long {
         checkAlive()
         val timestamp = Clock.System.now().toString()
-        val payload = InnerPayload(type = "text", timestamp = timestamp, body = text)
+        // Always include reply_info on outbound ratchet messages too — costs
+        // ~150 bytes per message and gives us self-healing display-name and
+        // server-URL updates without adding a separate "I-renamed-myself"
+        // message type. Receivers no-op when nothing changed.
+        val payload = InnerPayload(
+            type = "text",
+            timestamp = timestamp,
+            body = text,
+            replyInfo = ReplyInfo(
+                mailbox = contact.inboundMailboxId,
+                relayServer = relayServerUrl,
+                keyServer = keyServerUrl,
+                fingerprint = identity.fingerprint,
+                displayName = displayName,
+            ),
+        )
         val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
             .encodeToByteArray()
         val encrypted = contact.session.encrypt(plaintextBytes)
@@ -529,6 +614,22 @@ class Messaging internal constructor(
             )
             val text = decodeInnerPayloadText(payload)
             plaintexts += text
+
+            // Self-healing display-name update: if the contact's encrypted
+            // reply_info reports a different name than we have stored, update.
+            // No-ops when name is unchanged (the common case).
+            payload.replyInfo?.let { ri ->
+                val current = contactsByFingerprint[contact.contactFingerprint]
+                if (current != null && current.displayName != ri.displayName) {
+                    contactsByFingerprint[contact.contactFingerprint] =
+                        current.copy(displayName = ri.displayName)
+                    persistence.updateContactDisplayName(
+                        contact.contactFingerprint,
+                        ri.displayName,
+                    )
+                }
+            }
+
             persistence.saveMessage(
                 contactFingerprint = contact.contactFingerprint,
                 direction = org.khord.shared.storage.MessageDirection.RECEIVED,
@@ -685,9 +786,11 @@ class Messaging internal constructor(
             keyServerUrl: String,
             relayServerUrl: String,
             http: HttpClient,
+            displayName: String = "Anonymous",
         ): Messaging = Messaging(
             identity, keyServerUrl, relayServerUrl, http,
             persistence = org.khord.shared.storage.InMemoryPersistence(),
+            displayName = displayName,
         )
 
         /** Internal constructor with explicit persistence (e.g. DbPersistence). */
@@ -697,7 +800,10 @@ class Messaging internal constructor(
             relayServerUrl: String,
             http: HttpClient,
             persistence: org.khord.shared.storage.Persistence,
-        ): Messaging = Messaging(identity, keyServerUrl, relayServerUrl, http, persistence)
+            displayName: String = "Anonymous",
+        ): Messaging = Messaging(
+            identity, keyServerUrl, relayServerUrl, http, persistence, displayName,
+        )
 
         /**
          * Reconstruct a previously-registered Messaging instance from
@@ -720,6 +826,7 @@ class Messaging internal constructor(
                 relayServerUrl = record.relayServerUrl,
                 http = http,
                 persistence = persistence,
+                displayName = record.displayName,
             )
             m.needsServerRegistration = !record.registeredAtServer
             persistence.loadSignedPreKey()?.let { spk ->
@@ -730,15 +837,15 @@ class Messaging internal constructor(
             for ((id, secret) in persistence.loadAllOpkSecrets()) {
                 m.opkSecretByKeyId[id] = secret
             }
-            for (contact in persistence.loadAllContacts()) {
-                m.contactsByFingerprint[contact.fingerprint] = contact
+            for (info in persistence.loadAllContacts()) {
+                m.contactsByFingerprint[info.qr.fingerprint] = info
             }
             for ((mb, tok) in persistence.loadPendingMailboxes()) {
                 m.pendingInboundMailboxes[mb] = tok
             }
             for (session in persistence.loadAllSessions()) {
                 val contactIdEd = m.contactsByFingerprint[session.contactFingerprint]
-                    ?.let { Base64Std.decode(it.identityKey) }
+                    ?.let { Base64Std.decode(it.qr.identityKey) }
                     ?: continue   // Orphan session — skip; should not happen.
                 val cs = ContactSession(
                     contactIdentityKey = contactIdEd,

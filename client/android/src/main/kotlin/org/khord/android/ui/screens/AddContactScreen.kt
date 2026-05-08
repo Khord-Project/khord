@@ -15,8 +15,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -66,7 +70,16 @@ fun AddContactScreen(nav: NavController, vm: AddContactViewModel = viewModel()) 
         }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Add contact") }) }) { padding ->
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("Add contact") },
+            navigationIcon = {
+                IconButton(onClick = { nav.popBackStack() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+            },
+        )
+    }) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             TabRow(selectedTabIndex = tab.ordinal) {
                 Tab(selected = tab == Tab.MyQr, onClick = { tab = Tab.MyQr },

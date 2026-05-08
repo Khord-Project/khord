@@ -11,7 +11,10 @@ CREATE TABLE identity (
     -- 0 until the bundle has been successfully uploaded to the Key Server.
     -- Set to 1 by Messaging.register on a successful uploadBundle. Loaded
     -- back via Messaging.load so partial-registration crashes can recover.
-    registered_at_server   INTEGER NOT NULL DEFAULT 0
+    registered_at_server   INTEGER NOT NULL DEFAULT 0,
+    -- User's chosen display name. Sent (encrypted) inside reply_info on
+    -- outbound messages so contacts learn it without out-of-band exchange.
+    display_name           TEXT    NOT NULL DEFAULT 'Anonymous'
 );
 
 selectIdentity:
@@ -21,11 +24,14 @@ upsertIdentity:
 INSERT OR REPLACE INTO identity(
     id, ed25519_public, ed25519_secret, x25519_public, x25519_secret,
     fingerprint, key_server_url, relay_server_url, created_at,
-    registered_at_server
-) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    registered_at_server, display_name
+) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 markRegisteredAtServer:
 UPDATE identity SET registered_at_server = 1 WHERE id = 1;
+
+updateDisplayName:
+UPDATE identity SET display_name = ? WHERE id = 1;
 
 deleteIdentity:
 DELETE FROM identity;
