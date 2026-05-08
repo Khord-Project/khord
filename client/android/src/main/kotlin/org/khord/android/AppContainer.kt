@@ -6,6 +6,12 @@ import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import org.khord.android.ui.theme.KhordThemeChoice
+import org.khord.android.ui.theme.loadThemeChoice
+import org.khord.android.ui.theme.saveThemeChoice
 import org.khord.shared.Khord
 import org.khord.shared.KhordBootstrap
 import org.khord.shared.protocol.khordHttpClient
@@ -51,6 +57,27 @@ object AppContainer {
      * navigated past the seed screen by then).
      */
     val applicationScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * Currently active visual theme. Read by [org.khord.android.ui.theme.KhordTheme]
+     * via collectAsStateWithLifecycle so a write here triggers immediate
+     * recomposition app-wide. KhordApp.onCreate seeds it from
+     * SharedPreferences on process start; SettingsScreen writes new
+     * choices via [setThemeChoice].
+     */
+    private val _themeChoice = MutableStateFlow(KhordThemeChoice.TEAL)
+    val themeChoice: StateFlow<KhordThemeChoice> = _themeChoice.asStateFlow()
+
+    /** Called from KhordApp.onCreate so the very first composition sees the right theme. */
+    fun loadInitialTheme(context: Context) {
+        _themeChoice.value = loadThemeChoice(context)
+    }
+
+    /** Called from SettingsScreen — persists the choice AND recomposes everything. */
+    fun setThemeChoice(context: Context, choice: KhordThemeChoice) {
+        saveThemeChoice(context, choice)
+        _themeChoice.value = choice
+    }
 
     /**
      * Open the HTTP client, KeyStore, persistence, and try to load an

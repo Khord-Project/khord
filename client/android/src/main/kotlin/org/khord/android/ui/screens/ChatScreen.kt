@@ -43,6 +43,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavController
 import org.khord.shared.protocol.orchestrator.MessageEntry
+import org.khord.android.ui.theme.LocalKhordChatColors
 import org.khord.android.ui.viewmodel.ChatViewModel
 import org.khord.android.util.TimestampFormat
 
@@ -189,10 +190,9 @@ private fun MessageRow(msg: MessageEntry, senderName: String?) {
 @Composable
 private fun MessageBubble(msg: MessageEntry) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
-    val bg = if (isSent) MaterialTheme.colorScheme.primary
-             else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (isSent) MaterialTheme.colorScheme.onPrimary
-             else MaterialTheme.colorScheme.onSurfaceVariant
+    val chat = LocalKhordChatColors.current
+    val bg = if (isSent) chat.sentBubble else chat.receivedBubble
+    val fg = if (isSent) chat.sentText else chat.receivedText
     Box(
         modifier = Modifier
             .widthIn(max = 280.dp)

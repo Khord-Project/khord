@@ -27,5 +27,8 @@ class KhordApp : Application() {
         super.onCreate()
         System.loadLibrary("sqlcipher")
         PlatformContextProvider.set(this)
+        // Seed the theme StateFlow from SharedPreferences so the very first
+        // composition shows the user's saved theme (no flash of default).
+        AppContainer.loadInitialTheme(this)
     }
 }
