@@ -8,10 +8,30 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 import org.khord.android.AppContainer
 import org.khord.android.ServerUrls
 import org.khord.shared.crypto.IdentityKey
 import org.khord.shared.identity.SeedPhrase
+
+/**
+ * Picks the indices the confirmation screen quizzes the user on.
+ * Extracted as a pure helper so the randomness is unit-testable
+ * (an injectable [Random]) without spinning up the ViewModel.
+ *
+ * Returns [count] distinct indices from `[0, max)`, sorted ascending —
+ * sorted display reads more naturally ("words 2, 7, 11" vs "7, 2, 11").
+ */
+internal object ConfirmIndices {
+    fun pick(
+        rng: Random = Random.Default,
+        count: Int = 3,
+        max: Int = 12,
+    ): List<Int> {
+        require(count in 1..max) { "count $count out of range for max $max" }
+        return (0 until max).shuffled(rng).take(count).sorted()
+    }
+}
 
 /**
  * Owns the onboarding flow's state — the freshly generated phrase, the
@@ -41,8 +61,14 @@ class OnboardingViewModel : ViewModel() {
      */
     private var currentPhrase: List<String>? = null
 
-    /** Indices the confirm screen will quiz the user on (e.g. 2, 6, 10). */
-    private val confirmIndices = listOf(2, 6, 10)
+    /**
+     * Three distinct word positions the confirm screen quizzes the user
+     * on. Re-rolled on every [generate] call so a user (or attacker) who
+     * knows the previous prompt set can't game which words to memorise.
+     * Stable for the lifetime of one phrase — re-entering the confirm
+     * screen with the same phrase shows the same prompts.
+     */
+    private var confirmIndices: List<Int> = ConfirmIndices.pick()
 
     fun generate() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -51,6 +77,7 @@ class OnboardingViewModel : ViewModel() {
                 org.khord.shared.crypto.Crypto.ensureInitialized()
                 val words = SeedPhrase.generate()
                 currentPhrase = words
+                confirmIndices = ConfirmIndices.pick(max = words.size)
                 _status.value = Status.Display(words)
             } catch (e: Throwable) {
                 _status.value = Status.Failed(e.message ?: "generate failed")

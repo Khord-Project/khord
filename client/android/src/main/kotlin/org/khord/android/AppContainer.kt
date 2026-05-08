@@ -73,12 +73,23 @@ object AppContainer {
         return b.messaging != null
     }
 
-    /** Drop process references after panic so onboarding starts clean. */
+    /**
+     * Drop process references after panic so the next splash run rebuilds
+     * the world from scratch. The Activity that hosts the UI is expected
+     * to recreate() itself after this returns — that re-mounts the NavHost
+     * at SplashScreen, which calls [bootstrap] again with the now-null
+     * fields and creates a fresh KeyStore/Persistence/Messaging triple.
+     *
+     * Also clears [onboardingViewModel] so a leftover Status.Done (or a
+     * half-finished phrase) from the previous identity can't resurface
+     * during the next onboarding pass.
+     */
     fun reset() {
         messaging = null
         bootstrap = null
         keyStore = null
         http = null
+        onboardingViewModel = null
     }
 }
 

@@ -1,5 +1,6 @@
 package org.khord.android.ui.screens
 
+import android.app.Activity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -23,11 +24,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
-import org.khord.android.nav.Routes
 import org.khord.android.ui.viewmodel.SettingsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,13 +36,16 @@ import org.khord.android.ui.viewmodel.SettingsViewModel
 fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showConfirm by remember { mutableStateOf(false) }
+    val activity = LocalContext.current as? Activity
 
     LaunchedEffect(state.panicked) {
-        if (state.panicked) {
-            nav.navigate(Routes.WELCOME) {
-                popUpTo(Routes.SPLASH) { inclusive = true }
-            }
-        }
+        // After a successful panic + AppContainer.reset(), recreate the
+        // hosting Activity. This rebuilds the NavHost from scratch starting
+        // at SplashScreen, which re-runs AppContainer.bootstrap() and routes
+        // to Welcome cleanly. (Just navigating to Welcome would skip the
+        // splash, leaving AppContainer.bootstrap == null and crashing the
+        // first registration attempt with "AppContainer not bootstrapped".)
+        if (state.panicked) activity?.recreate()
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Settings") }) }) { padding ->
