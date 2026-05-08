@@ -38,7 +38,16 @@ services:
 
   keyserver:
     build:
-      context: ../servers/keyserver
+      # Repo-root-relative, NOT deploy/-relative. Coolify invokes
+      # `docker compose --project-directory <repo-root> -f deploy/docker-
+      # compose.coolify.yml build`, which resolves relative paths against
+      # the project directory (the repo root), not the compose file's
+      # directory. Using `../servers/keyserver` here would resolve to
+      # `<repo-root>/../servers/keyserver` and fail with "path not found".
+      # If you ever want to run this compose locally outside Coolify, add
+      # `--project-directory .` from the repo root so the resolution
+      # matches.
+      context: ./servers/keyserver
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://keyserver:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/keyserver
@@ -79,7 +88,8 @@ services:
 
   relayserver:
     build:
-      context: ../servers/relayserver
+      # Repo-root-relative — see the equivalent comment on keyserver above.
+      context: ./servers/relayserver
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://relayserver:${RELAYSERVER_DB_PASSWORD}@relayserver-db:5432/relayserver
