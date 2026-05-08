@@ -294,7 +294,19 @@ internal class DbPersistence(
         //     bypasses Khord's protections regardless.
         try { driver.close() } catch (_: Throwable) { /* keep going */ }
         if (databasePath != ":memory:") {
-            try { deleteFile(databasePath) } catch (_: Throwable) { /* keep going */ }
+            // Delete the main DB file PLUS every SQLite companion file.
+            // SQLite writes these alongside the main file depending on
+            // journal mode:
+            //   - <db>-wal      Write-Ahead Log (WAL mode)
+            //   - <db>-shm      Shared Memory file (WAL mode)
+            //   - <db>-journal  Rollback journal (legacy / DELETE mode)
+            // Leaving any of them behind lets a re-opened database recover
+            // partial state from the journal — observed in the wild as
+            // "ghost contacts" reappearing after panic. deleteFile is a
+            // no-op on missing paths so we don't need an existence check.
+            for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+                try { deleteFile(databasePath + suffix) } catch (_: Throwable) { /* keep going */ }
+            }
         }
     }
 

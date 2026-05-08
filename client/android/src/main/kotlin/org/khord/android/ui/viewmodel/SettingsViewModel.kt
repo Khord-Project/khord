@@ -1,5 +1,6 @@
 package org.khord.android.ui.viewmodel
 
+import android.os.Process
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,7 +10,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.khord.android.AppContainer
 
 class SettingsViewModel : ViewModel() {
@@ -37,33 +37,31 @@ class SettingsViewModel : ViewModel() {
 
     /**
      * Wipe everything: orchestrator panic + persistence panic + Keystore key
-     * deletion. After this completes the process is in onboarding-state, and
-     * [onComplete] fires from the Main thread — wired by the screen to
-     * Activity.recreate() so the app restarts cleanly.
+     * deletion. The hosting process is killed in `finally` so the next
+     * launch is a guaranteed cold boot — no Activity, ViewModelStore, or
+     * NavBackStackEntry survives to reference the now-deleted persistence.
      *
      * The `wiping` flag is set synchronously so the UI can show a spinner
      * before the destructive work even starts. Idempotent — repeated taps
      * while wiping is already in progress are no-ops.
      *
-     * The recreate trigger lives in a try/finally rather than a state-flow-
-     * observing LaunchedEffect for two reasons:
+     * Why kill the process instead of Activity.recreate()? Two earlier
+     * attempts (commits 851fe40, 9ad407c) used Activity.recreate(), which:
      *
-     *  1. Robustness against partial failure. If any cleanup step throws,
-     *     we still want to restart the Activity — a partially wiped device
-     *     is recoverable, but a stuck "Wiping…" spinner with no way out is
-     *     a complete dead-end (the only escape is force-stop from Settings).
+     *   1. Preserves NavBackStackEntries pointing at the destroyed
+     *      persistence layer, leading to "AppContainer not bootstrapped"
+     *      errors after the next bootstrap.
      *
-     *  2. Robustness against the Activity reference resolving to null. The
-     *     state-flow / LaunchedEffect path called `activity?.recreate()`,
-     *     where `activity` came from `LocalContext.current as? Activity`.
-     *     Compose sometimes wraps the Activity in a ContextWrapper (theme,
-     *     configuration), and the plain `as? Activity` cast silently returns
-     *     null — so the LaunchedEffect would fire, the cast would yield null,
-     *     and the recreate would be a no-op. The screen now resolves the
-     *     Activity by walking the ContextWrapper chain (see findActivity()
-     *     in SettingsScreen) and passes a guaranteed-non-null callback in.
+     *   2. Couldn't reliably resolve the Activity reference through
+     *      Compose's LocalContext (which is sometimes a ContextWrapper),
+     *      stranding the user on the "Wiping…" spinner.
+     *
+     * killProcess(myPid()) sidesteps both. Android's launcher cold-starts
+     * a fresh process when the user re-taps the icon — same approach
+     * Signal uses for "Delete all data". Ungraceful by design: there is
+     * zero state worth preserving after a panic wipe.
      */
-    fun panic(onComplete: () -> Unit) {
+    fun panic() {
         if (_state.value.wiping) return
         _state.update { it.copy(wiping = true) }
         viewModelScope.launch(Dispatchers.IO) {
@@ -72,12 +70,12 @@ class SettingsViewModel : ViewModel() {
                 AppContainer.keyStore?.clear()
                 AppContainer.reset()
             } catch (e: Throwable) {
-                // Logged so a future "panic left the device half-wiped"
-                // report has something to chase. We still proceed to the
-                // recreate step in finally — see kdoc above.
-                Log.w("Khord", "panic cleanup threw; restarting anyway", e)
+                // Non-fatal — we kill the process below regardless. Logged
+                // so a future "panic left the device half-wiped" report
+                // has something to chase in logcat.
+                Log.w("Khord", "panic cleanup threw; killing process anyway", e)
             } finally {
-                withContext(Dispatchers.Main) { onComplete() }
+                Process.killProcess(Process.myPid())
             }
         }
     }
