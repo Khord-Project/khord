@@ -28,6 +28,7 @@ import org.khord.android.ui.viewmodel.OnboardingViewModel
 
 @Composable
 fun SeedConfirmScreen(nav: NavController) {
+    SecureScreen()
     val vm = AppContainer.onboardingViewModel
     if (vm == null) {
         // We landed here without a phrase — shouldn't happen in normal flow.

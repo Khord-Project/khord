@@ -3,6 +3,9 @@ package org.khord.android
 import android.content.Context
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.khord.shared.Khord
 import org.khord.shared.KhordBootstrap
 import org.khord.shared.protocol.khordHttpClient
@@ -40,6 +43,14 @@ object AppContainer {
      * after a successful register().
      */
     @Volatile var onboardingViewModel: org.khord.android.ui.viewmodel.OnboardingViewModel? = null
+
+    /**
+     * Process-lifetime coroutine scope for fire-and-forget work that must
+     * outlive the ViewModel that scheduled it — currently the seed-phrase
+     * clipboard auto-clear (60s after copy, even if the user has already
+     * navigated past the seed screen by then).
+     */
+    val applicationScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     /**
      * Open the HTTP client, KeyStore, persistence, and try to load an
