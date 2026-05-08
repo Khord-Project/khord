@@ -12,7 +12,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
+import kotlin.test.assertFalse
 
 /**
  * Robolectric tests for [KeystoreBackedKeyStore].
@@ -77,13 +77,12 @@ class KeystoreBackedKeyStoreTest {
     }
 
     @Test
-    fun clear_makes_subsequent_decrypt_fail() = runTest {
+    fun stale_blob_without_keystore_key_triggers_regenerate() = runTest {
+        // Simulates the panic-race: panic + Process.killProcess fired
+        // between the Keystore alias delete and the SharedPreferences
+        // commit, leaving the (iv, ct) blob orphaned.
         val ks = KeystoreBackedKeyStore(ctx)
-        ks.getOrCreateDatabasePassphrase()
-        // Manually re-encrypt-without-clearing-prefs would let us assert
-        // "decrypt fails" — but clear() also wipes the prefs entry, so
-        // the next getOrCreate just regenerates. Instead we put back the
-        // prefs entry from before clear, then prove decrypt fails.
+        val original = ks.getOrCreateDatabasePassphrase()
         val prefs = ctx.getSharedPreferences("khord_keystore_blob", Context.MODE_PRIVATE)
         val savedIv = prefs.getString("iv", null)!!
         val savedCt = prefs.getString("ct", null)!!
@@ -92,9 +91,14 @@ class KeystoreBackedKeyStoreTest {
         // Reinstate the encrypted blob; the Keystore alias is now gone.
         prefs.edit().putString("iv", savedIv).putString("ct", savedCt).apply()
 
-        // Without the Keystore key, decrypt must fail.
-        assertFails {
-            KeystoreBackedKeyStore(ctx).getOrCreateDatabasePassphrase()
-        }
+        // Defense-in-depth: stale blob without its Keystore key must
+        // wipe-and-regenerate, NOT throw a SecretKey cast NPE on the
+        // next launch. The new passphrase MUST differ from the original.
+        val fresh = KeystoreBackedKeyStore(ctx).getOrCreateDatabasePassphrase()
+        assertEquals(32, fresh.size)
+        assertFalse(
+            fresh.contentEquals(original),
+            "regenerated passphrase must differ from the pre-clear original",
+        )
     }
 }

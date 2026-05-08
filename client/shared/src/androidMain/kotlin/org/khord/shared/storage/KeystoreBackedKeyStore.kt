@@ -48,22 +48,42 @@ class KeystoreBackedKeyStore(private val context: Context) : KeyStore {
     override suspend fun getOrCreateDatabasePassphrase(): ByteArray {
         val ivB64 = prefs.getString(PREF_IV, null)
         val ctB64 = prefs.getString(PREF_CIPHERTEXT, null)
-        return if (ivB64 != null && ctB64 != null) {
-            decryptExisting(
-                Base64.decode(ivB64, Base64.NO_WRAP),
-                Base64.decode(ctB64, Base64.NO_WRAP),
-            )
-        } else {
-            generateAndStore()
+        if (ivB64 != null && ctB64 != null) {
+            // Normal case: decrypt the stored blob with the Keystore key.
+            try {
+                return decryptExisting(
+                    Base64.decode(ivB64, Base64.NO_WRAP),
+                    Base64.decode(ctB64, Base64.NO_WRAP),
+                )
+            } catch (e: Exception) {
+                // Defense-in-depth for the panic-race: if the Keystore key
+                // is missing or the blob is otherwise undecryptable, wipe
+                // the orphaned prefs entry and fall through to generate a
+                // fresh passphrase. The most common trigger is panic +
+                // Process.killProcess firing between the synchronous
+                // Keystore alias delete and the SharedPreferences write.
+                // [clear] now uses commit() to avoid that, but defending
+                // in both layers means an OS-killed-mid-flush scenario
+                // (low-memory kill, force-stop) doesn't strand the next
+                // launch on a SecretKey cast NullPointerException.
+                prefs.edit().clear().commit()
+            }
         }
+        return generateAndStore()
     }
 
     override suspend fun clear() {
         // Step 1: kill the Keystore key — encrypted blob now unrecoverable.
         val ks = JavaKeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
         if (ks.containsAlias(KEYSTORE_ALIAS)) ks.deleteEntry(KEYSTORE_ALIAS)
-        // Step 2: drop the SharedPreferences entry.
-        prefs.edit().clear().apply()
+        // Step 2: drop the SharedPreferences entry SYNCHRONOUSLY. apply()
+        // is async — when the panic flow follows clear() with
+        // Process.killProcess(), the SharedPreferences write may not flush
+        // before the process dies, leaving an orphaned (iv, ct) blob
+        // pointing at a Keystore key that no longer exists. On next
+        // launch, decryptExisting() would then throw a SecretKey cast
+        // NullPointerException. commit() blocks until the write hits disk.
+        prefs.edit().clear().commit()
     }
 
     private fun ensureKeystoreKey(): SecretKey {
@@ -88,7 +108,15 @@ class KeystoreBackedKeyStore(private val context: Context) : KeyStore {
 
     private fun loadKeystoreKey(): SecretKey {
         val ks = JavaKeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
-        return ks.getKey(KEYSTORE_ALIAS, null) as SecretKey
+        // getKey returns null when the alias was deleted (e.g., after panic).
+        // Throw a typed exception rather than letting `as SecretKey` produce
+        // a cryptic NullPointerException — the catch in
+        // getOrCreateDatabasePassphrase converts this into a wipe-and-
+        // regenerate.
+        return (ks.getKey(KEYSTORE_ALIAS, null) as? SecretKey)
+            ?: throw IllegalStateException(
+                "AndroidKeyStore alias $KEYSTORE_ALIAS not found — was clear() called?"
+            )
     }
 
     private suspend fun generateAndStore(): ByteArray {
