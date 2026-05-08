@@ -273,24 +273,28 @@ internal class DbPersistence(
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
     override suspend fun panic() {
-        // Truncate every table FIRST so an attacker who recovers the file
-        // before deletion still finds nothing inside.
-        db.transaction {
-            db.messageQueries.deleteAllMessages()
-            db.preKeysQueries.deleteAllOpkSecrets()
-            db.preKeysQueries.deleteSignedPreKey()
-            db.identityQueries.deleteIdentity()
-            db.keyServerTokenQueries.deleteToken()
-            for (c in db.contactQueries.selectAllContacts().executeAsList()) {
-                db.contactQueries.deleteContact(c.fingerprint)
-            }
-            for (p in db.pendingMailboxQueries.selectAllPendingMailboxes().executeAsList()) {
-                db.pendingMailboxQueries.deletePendingMailbox(p.mailbox_id)
-            }
-        }
-        driver.close()
+        // Close-first, delete-second. Two reasons:
+        //
+        //  1. Robustness against in-flight DB activity. A background poller
+        //     (ChatViewModel, AddContactViewModel) might be mid-write when
+        //     the user taps panic — the previous "scrub-then-close" pattern
+        //     would queue panic's transaction behind the in-flight one,
+        //     waiting for the network call to return + the poll's writes
+        //     to commit. Several seconds of UI freeze in the worst case.
+        //     `driver.close()` releases the SQLite handle synchronously;
+        //     any in-flight transaction in another coroutine then fails
+        //     with "database closed", which is fine — we're destroying
+        //     everything anyway.
+        //
+        //  2. Forensic-recovery trade-off. The previous per-table scrub
+        //     was meant to leave nothing readable in the WAL/journal even
+        //     if the file delete failed. For the PoC with a sub-millisecond
+        //     unlink right after, the trade-off favours panic latency over
+        //     forensic guarantees — an attacker with file-system access
+        //     bypasses Khord's protections regardless.
+        try { driver.close() } catch (_: Throwable) { /* keep going */ }
         if (databasePath != ":memory:") {
-            deleteFile(databasePath)
+            try { deleteFile(databasePath) } catch (_: Throwable) { /* keep going */ }
         }
     }
 
