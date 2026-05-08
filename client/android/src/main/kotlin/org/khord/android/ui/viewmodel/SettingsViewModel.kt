@@ -16,6 +16,8 @@ class SettingsViewModel : ViewModel() {
 
     data class UiState(
         val fingerprint: String? = null,
+        val keyServerUrl: String? = null,
+        val relayServerUrl: String? = null,
         /**
          * Flipped to true the instant the user confirms panic, BEFORE the
          * destructive coroutine launches. The screen swaps to a "Wiping…"
@@ -31,7 +33,13 @@ class SettingsViewModel : ViewModel() {
 
     init {
         AppContainer.messaging?.let { m ->
-            _state.update { it.copy(fingerprint = m.myFingerprint) }
+            _state.update {
+                it.copy(
+                    fingerprint = m.myFingerprint,
+                    keyServerUrl = m.myKeyServerUrl,
+                    relayServerUrl = m.myRelayServerUrl,
+                )
+            }
         }
     }
 

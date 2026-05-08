@@ -36,7 +36,7 @@ fun WelcomeScreen(nav: NavController) {
         )
         Spacer(Modifier.height(32.dp))
         Button(
-            onClick = { nav.navigate(Routes.SEED_DISPLAY) },
+            onClick = { nav.navigate(Routes.SERVER_SETUP) },
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Generate identity")

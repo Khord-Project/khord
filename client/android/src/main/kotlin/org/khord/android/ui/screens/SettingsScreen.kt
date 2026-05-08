@@ -97,6 +97,20 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
 
                 Spacer(Modifier.height(16.dp))
 
+                Text("Servers", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Key server: ${state.keyServerUrl ?: "(loading)"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Relay server: ${state.relayServerUrl ?: "(loading)"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(16.dp))
+
                 ThemeSection()
 
                 Spacer(Modifier.height(16.dp))

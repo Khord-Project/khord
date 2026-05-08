@@ -19,6 +19,7 @@ import org.khord.android.ui.screens.ContactListScreen
 import org.khord.android.ui.screens.RegistrationScreen
 import org.khord.android.ui.screens.SeedConfirmScreen
 import org.khord.android.ui.screens.SeedDisplayScreen
+import org.khord.android.ui.screens.ServerSetupScreen
 import org.khord.android.ui.screens.SettingsScreen
 import org.khord.android.ui.screens.SplashScreen
 import org.khord.android.ui.screens.WelcomeScreen
@@ -43,6 +44,7 @@ private fun KhordNavGraph() {
     NavHost(navController = nav, startDestination = Routes.SPLASH) {
         composable(Routes.SPLASH) { SplashScreen(nav) }
         composable(Routes.WELCOME) { WelcomeScreen(nav) }
+        composable(Routes.SERVER_SETUP) { ServerSetupScreen(nav) }
         composable(Routes.SEED_DISPLAY) { SeedDisplayScreen(nav) }
         composable(Routes.SEED_CONFIRM) { SeedConfirmScreen(nav) }
         composable(Routes.REGISTRATION) { RegistrationScreen(nav) }

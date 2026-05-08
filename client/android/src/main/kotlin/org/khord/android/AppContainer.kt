@@ -121,19 +121,18 @@ object AppContainer {
 }
 
 /**
- * Server URLs for the PoC, sourced from BuildConfig so a developer can
- * point an APK at any LAN host at build time without touching source:
+ * Default server URLs for the "Use Khord community servers (recommended)"
+ * branch of the [org.khord.android.ui.screens.ServerSetupScreen] onboarding
+ * step. The user can override either with a custom URL via the same screen;
+ * whichever pair the user chose is persisted on the identity row at
+ * registration time, then read back via [Messaging.myKeyServerUrl] /
+ * [Messaging.myRelayServerUrl] on subsequent launches.
  *
- *     ./gradlew :android:assembleDebug \
- *         -Pkhord.keyserver.url=http://192.168.1.42:8001 \
- *         -Pkhord.relayserver.url=http://192.168.1.42:8002
- *
- * Defaults (set in :android:build.gradle.kts) are the standard Android
- * emulator → host loopback `http://10.0.2.2:{8001,8002}`, which is the
- * right thing for local emulator testing against the Docker compose stack.
+ * No build-time configuration: a developer pointing the app at a local
+ * Docker stack uses the "Use custom servers" option at runtime.
  */
 object ServerUrls {
-    val KEY_SERVER: String = BuildConfig.KEY_SERVER_URL
-    val RELAY_SERVER: String = BuildConfig.RELAY_SERVER_URL
+    const val DEFAULT_KEY_SERVER = "https://keys.khord.org"
+    const val DEFAULT_RELAY_SERVER = "https://relay.khord.org"
     const val DB_NAME = "khord.db"
 }

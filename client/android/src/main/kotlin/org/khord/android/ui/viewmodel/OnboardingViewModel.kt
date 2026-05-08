@@ -85,6 +85,25 @@ class OnboardingViewModel : ViewModel() {
 
     fun currentDisplayName(): String = displayName
 
+    /**
+     * Server URLs the user picked on [org.khord.android.ui.screens.ServerSetupScreen].
+     * Defaults to the community servers — overwritten by ServerSetupViewModel
+     * once the user confirms a choice (and the URLs have been health-checked).
+     * Persisted onto the identity row at registration time.
+     */
+    @Volatile
+    private var keyServerUrl: String = ServerUrls.DEFAULT_KEY_SERVER
+    @Volatile
+    private var relayServerUrl: String = ServerUrls.DEFAULT_RELAY_SERVER
+
+    fun setServerUrls(keyServer: String, relayServer: String) {
+        keyServerUrl = keyServer.trim().trimEnd('/')
+        relayServerUrl = relayServer.trim().trimEnd('/')
+    }
+
+    fun currentKeyServerUrl(): String = keyServerUrl
+    fun currentRelayServerUrl(): String = relayServerUrl
+
     fun generate() {
         viewModelScope.launch(Dispatchers.IO) {
             _status.value = Status.Generating
@@ -132,8 +151,8 @@ class OnboardingViewModel : ViewModel() {
                     ?: error("AppContainer not bootstrapped")
                 val messaging = bootstrap.registerFreshIdentity(
                     identity = identity,
-                    keyServerUrl = ServerUrls.KEY_SERVER,
-                    relayServerUrl = ServerUrls.RELAY_SERVER,
+                    keyServerUrl = keyServerUrl,
+                    relayServerUrl = relayServerUrl,
                     displayName = displayName,
                 )
                 AppContainer.messaging = messaging

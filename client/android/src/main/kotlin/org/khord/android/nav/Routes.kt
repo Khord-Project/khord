@@ -11,6 +11,7 @@ package org.khord.android.nav
 object Routes {
     const val SPLASH = "splash"
     const val WELCOME = "welcome"
+    const val SERVER_SETUP = "server-setup"
     const val SEED_DISPLAY = "seed/display"
     const val SEED_CONFIRM = "seed/confirm"
     const val REGISTRATION = "register"

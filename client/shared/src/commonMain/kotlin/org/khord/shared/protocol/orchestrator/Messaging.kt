@@ -770,6 +770,12 @@ class Messaging internal constructor(
     /** This user's own identity fingerprint. Stable across app launches. */
     val myFingerprint: String get() = identity.fingerprint
 
+    /** Key Server URL this identity registered against. Stable for life of identity. */
+    val myKeyServerUrl: String get() = keyServerUrl
+
+    /** Relay Server URL this identity registered against. Stable for life of identity. */
+    val myRelayServerUrl: String get() = relayServerUrl
+
     /** Test-only: lookup a session by inbound mailbox. */
     internal fun contactByInboundMailbox(mailboxId: String): ContactSession? =
         sessionsByInboundMailbox[mailboxId]
