@@ -49,23 +49,30 @@ services:
       # matches.
       context: ./servers/keyserver
     restart: unless-stopped
+    # List-form environment is required because of the bare
+    # `SERVICE_FQDN_KEYSERVER_8000` line below. Coolify's Traefik magic
+    # is triggered by a bare-name (no value) env-var declaration in list
+    # form — verified by reading the Coolify-rewritten compose of an
+    # already-working service on the same instance (MeTube), which uses
+    # `- SERVICE_URL_METUBE_8081` and ends up with a full pair of Traefik
+    # routers (http→https redirect + https with TLS). Map-form-with-empty-
+    # value (`SERVICE_FQDN_X: ""`) does NOT trigger the magic. Compose
+    # doesn't allow mixing list + map within one environment block, so
+    # everything here is list form.
     environment:
-      DATABASE_URL: postgresql+asyncpg://keyserver:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/keyserver
-      KEY_SERVER_TOKEN_SECRET: ${KEY_SERVER_TOKEN_SECRET}
-      # Coolify magic env var. The presence of `SERVICE_FQDN_<SERVICE>_<PORT>`
-      # in a compose service's env tells Coolify: "this service wants a
-      # Traefik route on the domain the operator configured for me in the
-      # Coolify UI (Resource → Domains)". Coolify substitutes the FQDN at
-      # deploy time AND auto-generates the Traefik labels (HTTPS entry-
-      # point, Let's Encrypt cert resolver, route by Host header, target
-      # port = the suffix of this var name). Without this reference,
-      # configuring a domain in the UI is dead weight — Traefik never
-      # learns about the route. Empty value = Coolify supplies it.
-      SERVICE_FQDN_KEYSERVER_8000: ""
+      - DATABASE_URL=postgresql+asyncpg://keyserver:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/keyserver
+      - KEY_SERVER_TOKEN_SECRET=${KEY_SERVER_TOKEN_SECRET}
+      # ↓ Coolify magic. Bare name, no value. When Coolify rewrites the
+      # compose for deployment, it (a) substitutes the configured FQDN
+      # and (b) auto-emits Traefik labels routing that hostname to this
+      # container's port 8000 with auto-Let's-Encrypt TLS. Removing this
+      # line silently breaks public access — Traefik will fall back to
+      # the default self-signed cert with no upstream attached.
+      - SERVICE_FQDN_KEYSERVER_8000
     # No host port binding — Coolify's Traefik routes container-to-container.
     # The app inside the container listens on 8000 (see ../servers/keyserver/
-    # Dockerfile CMD). When you assign a domain in Coolify's UI, target
-    # this service at port 8000.
+    # Dockerfile CMD). The port suffix on SERVICE_FQDN_KEYSERVER_8000
+    # above tells Coolify which container port to target.
     expose:
       - "8000"
     depends_on:
@@ -101,19 +108,20 @@ services:
       # Repo-root-relative — see the equivalent comment on keyserver above.
       context: ./servers/relayserver
     restart: unless-stopped
+    # List form for the same reason as keyserver above — bare-name
+    # SERVICE_FQDN_* triggers Coolify's Traefik label generation.
     environment:
-      DATABASE_URL: postgresql+asyncpg://relayserver:${RELAYSERVER_DB_PASSWORD}@relayserver-db:5432/relayserver
+      - DATABASE_URL=postgresql+asyncpg://relayserver:${RELAYSERVER_DB_PASSWORD}@relayserver-db:5432/relayserver
       # The .env file uses RELAY_-prefixed names for clarity in a
       # multi-service env, but the relay server's pydantic-settings reads
       # the unprefixed field names. Rebind here so no server-side code
       # change is required.
-      PROOF_OF_WORK_DIFFICULTY_BITS: ${RELAY_PROOF_OF_WORK_DIFFICULTY_BITS:-16}
-      MESSAGE_TTL_SECONDS: ${RELAY_MESSAGE_TTL_SECONDS:-604800}
-      # Coolify magic env var — see the equivalent comment on keyserver
-      # above. Empty value lets Coolify substitute the configured FQDN
-      # and auto-generate Traefik routing labels.
-      SERVICE_FQDN_RELAYSERVER_8000: ""
-    # Same comment as keyserver above — Coolify routes via port 8000.
+      - PROOF_OF_WORK_DIFFICULTY_BITS=${RELAY_PROOF_OF_WORK_DIFFICULTY_BITS:-16}
+      - MESSAGE_TTL_SECONDS=${RELAY_MESSAGE_TTL_SECONDS:-604800}
+      # ↓ Coolify magic — bare name, no value. See the equivalent block
+      # on keyserver above for the full reasoning.
+      - SERVICE_FQDN_RELAYSERVER_8000
+    # Coolify routes via port 8000 (the suffix on SERVICE_FQDN above).
     expose:
       - "8000"
     depends_on:
