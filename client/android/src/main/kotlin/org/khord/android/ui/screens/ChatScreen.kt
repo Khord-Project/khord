@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -44,6 +44,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavController
 import org.khord.shared.protocol.orchestrator.MessageEntry
 import org.khord.android.ui.viewmodel.ChatViewModel
+import org.khord.android.util.TimestampFormat
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,8 +101,17 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(state.messages) { msg ->
-                    MessageBubble(msg)
+                itemsIndexed(state.messages) { idx, msg ->
+                    val prev = state.messages.getOrNull(idx - 1)
+                    val showDateHeader = prev == null
+                        || !TimestampFormat.sameDay(prev.timestamp, msg.timestamp)
+                    if (showDateHeader) {
+                        DateSeparator(msg.timestamp)
+                    }
+                    MessageRow(
+                        msg = msg,
+                        senderName = state.contactDisplayName,
+                    )
                 }
             }
             state.error?.let {
@@ -135,22 +145,61 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
 }
 
 @Composable
+private fun DateSeparator(iso: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            TimestampFormat.dateHeaderLabel(iso),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun MessageRow(msg: MessageEntry, senderName: String?) {
+    val isSent = msg.direction == MessageEntry.Direction.SENT
+    val arrange = if (isSent) Arrangement.End else Arrangement.Start
+    val align = if (isSent) Alignment.End else Alignment.Start
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = align) {
+        // Sender label only above received messages — outgoing messages
+        // implicitly belong to the user, no need to label them.
+        if (!isSent && senderName != null) {
+            Text(
+                senderName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
+            )
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrange) {
+            MessageBubble(msg)
+        }
+        Text(
+            TimestampFormat.formatMessageTime(msg.timestamp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
 private fun MessageBubble(msg: MessageEntry) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val bg = if (isSent) MaterialTheme.colorScheme.primary
              else MaterialTheme.colorScheme.surfaceVariant
     val fg = if (isSent) MaterialTheme.colorScheme.onPrimary
              else MaterialTheme.colorScheme.onSurfaceVariant
-    val arrange = if (isSent) Arrangement.End else Arrangement.Start
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrange) {
-        Box(
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(bg)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        ) {
-            Text(msg.body, color = fg, style = MaterialTheme.typography.bodyMedium)
-        }
+    Box(
+        modifier = Modifier
+            .widthIn(max = 280.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Text(msg.body, color = fg, style = MaterialTheme.typography.bodyMedium)
     }
 }

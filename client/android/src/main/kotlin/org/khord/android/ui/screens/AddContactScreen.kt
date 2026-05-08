@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.PermissionState
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import org.khord.android.AppContainer
@@ -53,12 +55,12 @@ import org.khord.android.ui.viewmodel.AddContactViewModel
 import org.khord.android.util.ContactLink
 import org.khord.android.util.SecureClipboard
 
-private enum class Tab { MyQr, Scan }
+private enum class Tab { Share, Add }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddContactScreen(nav: NavController, vm: AddContactViewModel = viewModel()) {
-    var tab by remember { mutableStateOf(Tab.MyQr) }
+    var tab by remember { mutableStateOf(Tab.Share) }
     val state by vm.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -82,21 +84,21 @@ fun AddContactScreen(nav: NavController, vm: AddContactViewModel = viewModel()) 
     }) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             TabRow(selectedTabIndex = tab.ordinal) {
-                Tab(selected = tab == Tab.MyQr, onClick = { tab = Tab.MyQr },
-                    text = { Text("My QR") })
-                Tab(selected = tab == Tab.Scan, onClick = { tab = Tab.Scan },
-                    text = { Text("Scan") })
+                Tab(selected = tab == Tab.Share, onClick = { tab = Tab.Share },
+                    text = { Text("Share") })
+                Tab(selected = tab == Tab.Add, onClick = { tab = Tab.Add },
+                    text = { Text("Add") })
             }
             when (tab) {
-                Tab.MyQr -> MyQrPane(vm, state)
-                Tab.Scan -> ScanPane(nav, vm, state)
+                Tab.Share -> SharePane(vm, state)
+                Tab.Add -> AddPane(nav, vm, state)
             }
         }
     }
 }
 
 @Composable
-private fun MyQrPane(vm: AddContactViewModel, state: AddContactViewModel.UiState) {
+private fun SharePane(vm: AddContactViewModel, state: AddContactViewModel.UiState) {
     LaunchedEffect(Unit) { vm.pollWhileShowingMyQr() }
     val context = LocalContext.current
 
@@ -186,7 +188,7 @@ private fun FingerprintRow(fingerprint: String) {
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-private fun ScanPane(
+private fun AddPane(
     nav: NavController,
     vm: AddContactViewModel,
     state: AddContactViewModel.UiState,
@@ -194,30 +196,13 @@ private fun ScanPane(
     val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
     var firstMessage by remember { mutableStateOf("") }
 
-    if (!cameraPermission.status.isGranted) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(20.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text("Camera permission is required to scan a QR code.",
-                style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(16.dp))
-            Button(onClick = { cameraPermission.launchPermissionRequest() }) {
-                Text("Grant camera permission")
-            }
-        }
-        return
-    }
-
     val scanResult = state.scanResult
     when (scanResult) {
         is AddContactViewModel.ScanResult.Stored -> {
             Column(
                 modifier = Modifier.fillMaxSize().padding(20.dp),
             ) {
-                Text("Contact scanned",
-                    style = MaterialTheme.typography.headlineSmall)
+                Text("Contact added", style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(8.dp))
                 FingerprintRow(fingerprint = scanResult.qr.fingerprint)
                 Spacer(Modifier.height(16.dp))
@@ -253,71 +238,111 @@ private fun ScanPane(
                     color = MaterialTheme.colorScheme.error)
             }
         }
-        null -> {
-            ScanCaptureWithManualFallback(vm)
+        null -> ManualEntryAndScanner(vm, cameraPermission)
+    }
+}
+
+@OptIn(ExperimentalPermissionsApi::class)
+@Composable
+private fun ManualEntryAndScanner(
+    vm: AddContactViewModel,
+    cameraPermission: PermissionState,
+) {
+    var manualInput by remember { mutableStateOf("") }
+    var parseError by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        // ── Manual entry section ────────────────────────────────────────────
+        // Always visible. Users who paste a contact link from Signal/email/etc.
+        // never trigger a camera permission dialog this way — privacy-sensitive
+        // users get a friction-free first-contact path.
+        Text("Add by contact link", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = manualInput,
+            onValueChange = {
+                manualInput = it
+                parseError = null
+            },
+            label = { Text("Paste khord://contact/…") },
+            singleLine = false,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (parseError != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                parseError!!,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = {
+                val json = try {
+                    ContactLink.toJson(manualInput)
+                } catch (e: IllegalArgumentException) {
+                    parseError = "Invalid contact data."
+                    return@Button
+                }
+                vm.onScanned(json)
+            },
+            enabled = manualInput.isNotBlank(),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Add contact") }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Paste a contact link your friend sent you " +
+                "(Signal, email, AirDrop-equivalent, etc.).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(24.dp))
+        DividerWithText("or")
+        Spacer(Modifier.height(24.dp))
+
+        // ── Scanner section ─────────────────────────────────────────────────
+        Text("Scan a QR code", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        if (cameraPermission.status.isGranted) {
+            QrScannerView(
+                onScanned = { vm.onScanned(it) },
+                modifier = Modifier.fillMaxWidth().height(320.dp),
+            )
+        } else {
+            Button(
+                onClick = { cameraPermission.launchPermissionRequest() },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Scan QR Code") }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Camera permission is requested only when you tap.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 @Composable
-private fun ScanCaptureWithManualFallback(vm: AddContactViewModel) {
-    var manualOpen by remember { mutableStateOf(false) }
-    var manualInput by remember { mutableStateOf("") }
-    var parseError by remember { mutableStateOf<String?>(null) }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f)) {
-            QrScannerView(onScanned = { vm.onScanned(it) })
-        }
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = if (manualOpen) "Hide manual entry ▴" else "Enter contact link manually ▾",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .clickable {
-                        manualOpen = !manualOpen
-                        if (!manualOpen) parseError = null
-                    }
-                    .padding(vertical = 4.dp),
-            )
-            if (manualOpen) {
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = manualInput,
-                    onValueChange = {
-                        manualInput = it
-                        parseError = null
-                    },
-                    label = { Text("khord://contact/… or pasted JSON") },
-                    singleLine = false,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (parseError != null) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        parseError!!,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        val json = try {
-                            ContactLink.toJson(manualInput)
-                        } catch (e: IllegalArgumentException) {
-                            parseError = "Invalid contact data."
-                            return@Button
-                        }
-                        // Hand off to the same path as a scanned QR; downstream
-                        // JSON-shape validation lives in onScanned().
-                        vm.onScanned(json)
-                    },
-                    enabled = manualInput.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Use this contact link") }
-            }
-        }
+private fun DividerWithText(text: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f))
     }
 }

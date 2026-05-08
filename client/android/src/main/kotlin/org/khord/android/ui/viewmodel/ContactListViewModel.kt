@@ -60,7 +60,16 @@ class ContactListViewModel : ViewModel() {
                             lastTimestamp = last?.timestamp,
                         )
                     }
-                    _state.update { it.copy(rows = rows, refreshing = false) }
+                    // Recent-first ordering: contacts WITH a last message sorted
+                    // by timestamp descending; contacts with no messages yet trail
+                    // at the bottom (they're new QR-only entries waiting for the
+                    // first inbound payload). String-compare on ISO 8601 is
+                    // chronologically correct because the format is lex-sortable.
+                    val sorted = rows.sortedWith(
+                        compareByDescending<Row> { it.lastTimestamp != null }
+                            .thenByDescending { it.lastTimestamp ?: "" },
+                    )
+                    _state.update { it.copy(rows = sorted, refreshing = false) }
                 } catch (e: Throwable) {
                     _state.update {
                         it.copy(refreshing = false, error = e.message ?: e::class.simpleName)

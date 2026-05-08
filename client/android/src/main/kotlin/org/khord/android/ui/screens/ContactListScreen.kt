@@ -4,9 +4,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -23,20 +26,42 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import org.khord.android.nav.Routes
 import org.khord.android.ui.viewmodel.ContactListViewModel
+import org.khord.android.util.TimestampFormat
+
+private const val RECENT_CHATS_LIMIT = 5
+private const val POLL_INTERVAL_MS = 10_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
+    var showAll by remember { mutableStateOf(false) }
+
+    // Auto-poll while this screen is visible. Refresh on initial mount and
+    // every 10 s thereafter; cancelled on dispose so background tabs don't
+    // burn battery / data. Pull-to-refresh remains via the toolbar icon.
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            vm.refresh(pollServer = true)
+            delay(POLL_INTERVAL_MS)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -58,51 +83,118 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
             }
         },
     ) { innerPadding ->
-        Box(
-            modifier = Modifier.padding(innerPadding).fillMaxSize(),
-        ) {
+        Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
             if (state.rows.isEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(32.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text("No contacts yet", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Tap + to share your QR or scan one.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (state.error != null) {
-                        Text(
-                            "Error: ${state.error}",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 16.dp),
-                        )
-                    }
-                }
+                EmptyState(error = state.error)
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(state.rows) { row ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { nav.navigate(Routes.chat(row.fingerprint)) }
-                                .padding(16.dp),
-                        ) {
-                            Text(row.displayLabel, style = MaterialTheme.typography.titleMedium)
-                            row.lastMessageBody?.let {
-                                Text(it, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                            } ?: Text(
-                                "(no messages yet)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        HorizontalDivider()
-                    }
+                RecentChats(
+                    rows = state.rows,
+                    showAll = showAll,
+                    onToggleShowAll = { showAll = !showAll },
+                    onRowClick = { fp -> nav.navigate(Routes.chat(fp)) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyState(error: String?) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("No contacts yet", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Tap + to share your QR or scan one.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (error != null) {
+            Text(
+                "Error: $error",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecentChats(
+    rows: List<ContactListViewModel.Row>,
+    showAll: Boolean,
+    onToggleShowAll: () -> Unit,
+    onRowClick: (String) -> Unit,
+) {
+    // Section header — always shown above the list.
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text(
+            "Recent Chats",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+
+        val visible = if (showAll) rows else rows.take(RECENT_CHATS_LIMIT)
+
+        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            items(visible) { row ->
+                ConversationRow(row, onClick = { onRowClick(row.fingerprint) })
+                HorizontalDivider()
+            }
+            if (rows.size > RECENT_CHATS_LIMIT) {
+                item {
+                    Text(
+                        text = if (showAll) "Show recent only"
+                               else "See all conversations (${rows.size})",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onToggleShowAll() }
+                            .padding(16.dp),
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ConversationRow(
+    row: ContactListViewModel.Row,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                row.displayLabel,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                row.lastMessageBody ?: "(no messages yet)",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (row.lastTimestamp != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                TimestampFormat.formatRelativeShort(row.lastTimestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
