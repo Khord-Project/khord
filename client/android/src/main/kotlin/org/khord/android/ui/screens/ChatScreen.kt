@@ -121,6 +121,11 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp))
             }
+            val unavailable = state.contactStatus ==
+                ChatViewModel.ContactStatus.Unavailable
+            if (unavailable) {
+                UnavailableBanner()
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -129,12 +134,18 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type a message") },
+                    placeholder = {
+                        Text(
+                            if (unavailable) "Contact unavailable"
+                            else "Type a message"
+                        )
+                    },
                     singleLine = false,
+                    enabled = !unavailable,
                 )
                 Spacer(Modifier.width(8.dp))
                 Button(
-                    enabled = !state.sending && draft.isNotBlank(),
+                    enabled = !state.sending && !unavailable && draft.isNotBlank(),
                     onClick = {
                         vm.send(draft)
                         draft = ""
@@ -142,6 +153,30 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                 ) { Text("Send") }
             }
         }
+    }
+}
+
+/**
+ * Inline banner above the input row when the contact's relay endpoint
+ * has stopped responding (404 or network errors). The chat history
+ * stays visible — the user may still want to re-read old messages.
+ */
+@Composable
+private fun UnavailableBanner() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(
+            "This contact appears to be unavailable. " +
+                "Their account may have been removed.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+        )
     }
 }
 

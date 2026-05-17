@@ -9,6 +9,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import org.khord.android.ui.theme.KhordThemeChoice
 import org.khord.android.ui.theme.loadThemeChoice
 import org.khord.android.ui.theme.saveThemeChoice
@@ -54,6 +55,41 @@ object AppContainer {
      * connections have completed their auth handshake yet.
      */
     val pushConnected: MutableStateFlow<Set<String>> = MutableStateFlow(emptySet())
+
+    /**
+     * Per-contact consecutive `receiveMessages()` failure count.
+     * Incremented by [recordReceiveFailure] from callers that drive
+     * receive (ChatViewModel poll loop, KhordPushService push handler);
+     * reset to 0 by [recordReceiveSuccess] on any successful drain.
+     *
+     * ContactListViewModel observes this to surface a muted indicator
+     * once the count crosses [DEAD_CONTACT_THRESHOLD] (currently 3) —
+     * the user sees "this contact appears to be unavailable" without
+     * having to open the chat.
+     *
+     * Ephemeral: lives only in the running process. A panic or app
+     * restart resets every counter to 0, which is fine — the same
+     * receive failures will recur if the contact really is gone.
+     */
+    val contactReceiveFailures: MutableStateFlow<Map<String, Int>> =
+        MutableStateFlow(emptyMap())
+
+    const val DEAD_CONTACT_THRESHOLD = 3
+
+    fun recordReceiveFailure(fingerprint: String) {
+        contactReceiveFailures.update { current ->
+            current + (fingerprint to ((current[fingerprint] ?: 0) + 1))
+        }
+    }
+
+    fun recordReceiveSuccess(fingerprint: String) {
+        // Drop the entry entirely rather than write `0` — the map then
+        // doubles as a "which contacts are currently failing" set for
+        // any future observer that prefers `containsKey` semantics.
+        contactReceiveFailures.update { current ->
+            if (fingerprint in current) current - fingerprint else current
+        }
+    }
 
     /**
      * Shared across the 3 onboarding screens (display → confirm → register)
@@ -130,6 +166,7 @@ object AppContainer {
         http = null
         onboardingViewModel = null
         pushConnected.value = emptySet()
+        contactReceiveFailures.value = emptyMap()
     }
 }
 

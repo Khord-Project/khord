@@ -2,6 +2,7 @@ package org.khord.android
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,6 +12,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -68,17 +70,41 @@ private fun KhordNavGraph(
     pendingDeepLinkFingerprint: androidx.compose.runtime.MutableState<String?>,
 ) {
     val nav = rememberNavController()
+    val context = LocalContext.current
 
     // Respond to notification deep-links: when a fingerprint appears on
     // the pending state, navigate to the chat. Consume the value so the
     // same intent doesn't fire twice on configuration change.
+    //
+    // Dead-contact guard: if the target fingerprint isn't in the live
+    // contact session list (e.g. the user panic-wiped and the
+    // notification's PendingIntent points at an erased contact), drop
+    // the user on the contact list with a brief toast rather than
+    // routing to a chat screen that can't load.
     LaunchedEffect(pendingDeepLinkFingerprint.value) {
         val fp = pendingDeepLinkFingerprint.value ?: return@LaunchedEffect
         pendingDeepLinkFingerprint.value = null
-        nav.navigate(Routes.chat(fp)) {
-            // Don't pile up duplicate chat instances if the user keeps
-            // tapping notifications.
-            launchSingleTop = true
+        val contactExists = AppContainer.messaging
+            ?.contacts()
+            ?.any { it.contactFingerprint == fp } == true
+        if (contactExists) {
+            nav.navigate(Routes.chat(fp)) {
+                // Don't pile up duplicate chat instances if the user keeps
+                // tapping notifications.
+                launchSingleTop = true
+            }
+        } else {
+            Toast.makeText(
+                context,
+                "This conversation is no longer available.",
+                Toast.LENGTH_SHORT,
+            ).show()
+            // Fall back to the contact list. popUpTo on Splash so the back
+            // stack doesn't leak the (now-gone) chat route.
+            nav.navigate(Routes.CONTACTS) {
+                popUpTo(Routes.SPLASH) { inclusive = false }
+                launchSingleTop = true
+            }
         }
     }
 

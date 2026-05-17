@@ -131,8 +131,12 @@ class KhordPushService : Service() {
                 messaging.receiveMessages(contact)
             }.getOrElse {
                 Log.w(TAG, "receiveMessages threw for $contactFingerprint", it)
+                AppContainer.recordReceiveFailure(contactFingerprint)
                 return@launch
             }
+            // Reset the dead-contact streak — the drain worked even if it
+            // returned zero new messages.
+            AppContainer.recordReceiveSuccess(contactFingerprint)
             if (plaintexts.isEmpty()) return@launch
 
             val displayName = messaging.contactDisplayName(contactFingerprint)

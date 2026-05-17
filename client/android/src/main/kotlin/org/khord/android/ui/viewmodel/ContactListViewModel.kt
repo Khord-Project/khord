@@ -22,6 +22,14 @@ class ContactListViewModel : ViewModel() {
         val displayLabel: String,
         val lastMessageBody: String?,
         val lastTimestamp: String?,
+        /**
+         * True when this contact's `receiveMessages` has failed at
+         * least [AppContainer.DEAD_CONTACT_THRESHOLD] times in a row
+         * (per the AppContainer counter map). The screen renders such
+         * rows muted — clickable, but visually de-emphasised so the
+         * user notices something's off without having to open the chat.
+         */
+        val unavailable: Boolean = false,
     )
 
     data class UiState(
@@ -34,7 +42,32 @@ class ContactListViewModel : ViewModel() {
     val state: StateFlow<UiState> = _state.asStateFlow()
     private val mutex = Mutex()
 
-    init { refresh(pollServer = false) }
+    init {
+        refresh(pollServer = false)
+        // Re-render whenever the dead-contact counter changes so the
+        // muted-row indicator shows up without waiting for the next
+        // pull-to-refresh or 10 s auto-poll cycle.
+        viewModelScope.launch {
+            AppContainer.contactReceiveFailures.collect { reapplyUnavailable(it) }
+        }
+    }
+
+    /**
+     * Lightweight in-place re-decoration of existing rows — flips the
+     * `unavailable` flag based on the latest failure counter without
+     * touching the relatively expensive history-loading path that the
+     * full [refresh] runs.
+     */
+    private fun reapplyUnavailable(failures: Map<String, Int>) {
+        _state.update { ui ->
+            ui.copy(rows = ui.rows.map { row ->
+                val isUnavailable = (failures[row.fingerprint] ?: 0) >=
+                    AppContainer.DEAD_CONTACT_THRESHOLD
+                if (row.unavailable == isUnavailable) row
+                else row.copy(unavailable = isUnavailable)
+            })
+        }
+    }
 
     /** Pull-to-refresh: poll pending mailboxes for new contacts, then reload list. */
     fun refresh(pollServer: Boolean = true) {
@@ -55,6 +88,7 @@ class ContactListViewModel : ViewModel() {
                             }
                         }
                     }
+                    val failures = AppContainer.contactReceiveFailures.value
                     val rows = messaging.contacts().map { contact ->
                         val history = messaging.messageHistory(contact.contactFingerprint)
                         val last = history.lastOrNull()
@@ -65,11 +99,14 @@ class ContactListViewModel : ViewModel() {
                         // contacts before any messaging stay on the FP fallback.
                         val label = name ?: (contact.contactFingerprint.take(8) +
                             "…" + contact.contactFingerprint.takeLast(8))
+                        val isUnavailable = (failures[contact.contactFingerprint] ?: 0) >=
+                            AppContainer.DEAD_CONTACT_THRESHOLD
                         Row(
                             fingerprint = contact.contactFingerprint,
                             displayLabel = label,
                             lastMessageBody = last?.body,
                             lastTimestamp = last?.timestamp,
+                            unavailable = isUnavailable,
                         )
                     }
                     // Recent-first ordering: contacts WITH a last message sorted

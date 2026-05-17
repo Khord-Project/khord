@@ -185,6 +185,18 @@ private fun ConversationRow(
     row: ContactListViewModel.Row,
     onClick: () -> Unit,
 ) {
+    // Mute the row visually when its contact's receiveMessages has
+    // been failing repeatedly. Row stays tappable — the user can open
+    // the chat to see what's wrong (chat screen has its own banner).
+    val nameColor = if (row.unavailable)
+        MaterialTheme.colorScheme.onSurfaceVariant
+    else
+        MaterialTheme.colorScheme.onSurface
+    val previewText = if (row.unavailable) {
+        "Unavailable — " + (row.lastMessageBody ?: "(no messages yet)")
+    } else {
+        row.lastMessageBody ?: "(no messages yet)"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -196,11 +208,12 @@ private fun ConversationRow(
             Text(
                 row.displayLabel,
                 style = MaterialTheme.typography.titleMedium,
+                color = nameColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                row.lastMessageBody ?: "(no messages yet)",
+                previewText,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
