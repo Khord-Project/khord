@@ -55,7 +55,7 @@ Proof of Concept — under active development.
 
 - **Servers are deliberately dumb.** They route and store opaque blobs. They never parse, decrypt, or understand message content.
 - **Identity is the key.** A user's identity is their long-lived Ed25519 identity key. No emails, phone numbers, or usernames.
-- **QR code introductions.** Contacts are added by scanning QR codes containing the identity key, pre-key bundle reference, and relay mailbox ID. No server-facilitated discovery.
+- **QR codes or contact links.** Contacts are added by scanning QR codes or sharing contact links containing the public identity key, server URLs, and a relay mailbox ID. No server-facilitated discovery.
 - **Per-contact directional mailboxes.** Each side of a relationship has its own inbound mailbox on the Relay Server. The server cannot correlate which mailboxes belong to the same user or conversation.
 - **Minimal server-side state.** Messages are deleted on delivery confirmation. Sequence counters are per-mailbox and cleared with delivery. TTL expiry handles abandoned mailboxes.
 
@@ -67,25 +67,32 @@ Proof of Concept — under active development.
 | Key Server | Python / FastAPI | Mature async framework, simple REST API for pre-key bundle storage. |
 | Relay Server | Python / FastAPI | Same stack, WebSocket + REST support for message routing. |
 | Database | PostgreSQL | Both servers, separate instances. Handles scale of per-contact mailbox model. |
-| Crypto primitives | libsodium (lazysodium-android / libsodium.js) | X25519, Ed25519, XSalsa20-Poly1305, Argon2id. |
+| Crypto primitives | libsodium (`ionspin/kotlin-multiplatform-libsodium`) | X25519, Ed25519, XChaCha20-Poly1305, Argon2id. |
 | Crypto protocol | Signal Protocol (X3DH + Double Ratchet) | Implemented to spec on libsodium primitives. Not using libsignal library. |
-| Push notifications | UnifiedPush | Open standard, no Google dependency, F-Droid compatible. |
+| Push notifications | WebSocket (real-time); UnifiedPush and FCM planned | WebSocket-first per ADR 022 — privacy-preserving by default, no third-party push provider required. |
 | Deployment (PoC) | Docker Compose | Two FastAPI containers, two PostgreSQL containers, no shared networks. |
 
 ## Messaging Flow (Simplified)
 
 1. **Registration:** Client generates identity key pair from seed phrase, uploads pre-key bundles to Key Server.
-2. **Contact exchange:** Alice and Bob scan each other's QR codes (containing identity key + relay mailbox ID).
+2. **Contact exchange:** Alice scans Bob's QR code or enters his contact link (shared via any channel). One scan suffices — Bob's side auto-creates the Alice contact from the encrypted `reply_info` carried in Alice's first message. No second QR scan is required from Bob.
 3. **First message:** Alice fetches Bob's pre-key bundle from Key Server, performs X3DH key agreement, creates a Double Ratchet session, encrypts the message, and sends the ciphertext to Bob's mailbox on Relay Server.
-4. **Delivery:** Bob's client polls or receives via WebSocket, decrypts with Double Ratchet, message appears.
+4. **Delivery:** Bob's client receives via WebSocket push (Android foreground service) for real-time delivery; polling is the fallback. The client decrypts with Double Ratchet and the message appears.
 5. **Ongoing:** Double Ratchet advances with every message, providing forward secrecy and post-compromise recovery.
 
 ## Key Backup & Recovery
 
-- **Seed phrase (primary):** Identity key is derived deterministically from a BIP39-style mnemonic via Argon2id KDF. User records this phrase on paper.
-- **Custom passphrase (optional):** Users may provide their own passphrase, subject to a mandatory entropy estimation with a hard minimum floor (80 bits) and a recommended minimum (128 bits).
-- **Shamir's Secret Sharing (optional):** Seed can be split into N parts where any K parts reconstruct the secret. Advanced users can distribute parts to trusted locations.
-- **Message backup (separate):** Encrypted archive of conversation content only. Never contains identity keys, contact keys, or relay mailbox IDs.
+### Implemented
+
+- **Seed phrase:** Identity key is derived deterministically from a BIP39 mnemonic via Argon2id KDF. User records this phrase on paper at onboarding.
+
+### Planned
+
+- **Custom passphrase** with entropy validation (mandatory floor + recommended minimum).
+- **Shamir's Secret Sharing** for splitting the seed into N parts where any K reconstruct.
+- **Encrypted message backup** — content only, never identity keys, contact keys, or relay mailbox IDs.
+
+See [docs/DEFERRED.md](docs/DEFERRED.md) for the full deferred-decisions list with priority tags.
 
 ## What Khord Does NOT Do (Explicit Non-Goals for PoC)
 
@@ -96,8 +103,6 @@ Proof of Concept — under active development.
 - Voice/video calls
 - Server-facilitated contact discovery
 - Organizational deployment mode
-
-See [DEFERRED.md](DEFERRED.md) for the full deferred decisions list with context.
 
 ## Licensing
 
@@ -116,7 +121,7 @@ AGPL ensures that anyone running a modified version of the server must publish t
 ## Project Links
 
 - **Website:** https://khord.org (planned)
-- **Repository:** TBD
-- **Protocol Specification:** See [PROTOCOL.md](PROTOCOL.md)
-- **Architecture Decisions:** See [decisions/](decisions/)
-- **Deferred Decisions:** See [DEFERRED.md](DEFERRED.md)
+- **Repository:** https://github.com/Khord-Project/khord
+- **Protocol Specification:** [docs/PROTOCOL.md](docs/PROTOCOL.md)
+- **Architecture Decisions:** [docs/decisions/](docs/decisions/)
+- **Deferred Decisions:** [docs/DEFERRED.md](docs/DEFERRED.md)
