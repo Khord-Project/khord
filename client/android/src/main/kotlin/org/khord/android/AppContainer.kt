@@ -141,11 +141,16 @@ object AppContainer {
  * registration time, then read back via [Messaging.myKeyServerUrl] /
  * [Messaging.myRelayServerUrl] on subsequent launches.
  *
- * No build-time configuration: a developer pointing the app at a local
- * Docker stack uses the "Use custom servers" option at runtime.
+ * The defaults come from per-flavor BuildConfig fields:
+ *   - `dev` flavor → http://10.0.2.2:8001 / :8002 (emulator host loopback)
+ *   - `prod` flavor → https://keys.khord.org / https://relay.khord.org
+ *
+ * See `productFlavors` in `client/android/build.gradle.kts`. `const val`
+ * isn't possible here because Kotlin doesn't treat AGP's generated
+ * BuildConfig fields as compile-time constants — `val` is the right shape.
  */
 object ServerUrls {
-    const val DEFAULT_KEY_SERVER = "https://keys.khord.org"
-    const val DEFAULT_RELAY_SERVER = "https://relay.khord.org"
+    val DEFAULT_KEY_SERVER: String = BuildConfig.DEFAULT_KEY_SERVER
+    val DEFAULT_RELAY_SERVER: String = BuildConfig.DEFAULT_RELAY_SERVER
     const val DB_NAME = "khord.db"
 }

@@ -39,6 +39,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import org.khord.android.BuildConfig
 import org.khord.android.ServerUrls
 import org.khord.android.nav.Routes
 import org.khord.android.ui.viewmodel.ServerSetupViewModel
@@ -163,6 +164,14 @@ fun ServerSetupScreen(
 
 @Composable
 private fun CommunityChoice(selected: Boolean, onSelect: () -> Unit) {
+    // Dev-flavor builds default to the emulator loopback (10.0.2.2) instead
+    // of the public khord.org servers. Make the label honest about which
+    // environment the user is about to commit their identity to.
+    val label = if (BuildConfig.IS_DEV_FLAVOR) {
+        "Use dev servers (10.0.2.2)"
+    } else {
+        "Use Khord Community Servers (recommended)"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -172,10 +181,7 @@ private fun CommunityChoice(selected: Boolean, onSelect: () -> Unit) {
     ) {
         RadioButton(selected = selected, onClick = onSelect)
         Column(modifier = Modifier.padding(top = 12.dp)) {
-            Text(
-                "Use Khord Community Servers (recommended)",
-                style = MaterialTheme.typography.bodyLarge,
-            )
+            Text(label, style = MaterialTheme.typography.bodyLarge)
             Spacer(Modifier.height(2.dp))
             Text(
                 ServerUrls.DEFAULT_KEY_SERVER,

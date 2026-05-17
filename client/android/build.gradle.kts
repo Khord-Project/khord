@@ -13,9 +13,10 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1.0"
-        // Server URLs are no longer baked at build time — they're picked at
-        // runtime via the ServerSetupScreen onboarding step (with a "Use
-        // Khord community servers" default and "custom" override).
+        // Default server URLs are picked at compile time per flavor (see
+        // productFlavors below) and exposed via BuildConfig. The user can
+        // still override either with "Use custom servers" at runtime via
+        // the ServerSetupScreen onboarding step.
     }
 
     sourceSets["main"].apply {
@@ -30,8 +31,36 @@ android {
         }
     }
 
+    // Two flavors so dev (emulator host loopback) and prod (khord.org) can
+    // both be installed side-by-side on the same device via the .dev
+    // applicationIdSuffix — useful when debugging interop between the two
+    // environments simultaneously.
+    flavorDimensions += "environment"
+    productFlavors {
+        create("dev") {
+            dimension = "environment"
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            // 10.0.2.2 is the Android emulator's loopback to the host
+            // running `docker compose up` — keyserver on host 8001,
+            // relayserver on host 8002 (see khord_local_dev memory).
+            buildConfigField("String", "DEFAULT_KEY_SERVER", "\"http://10.0.2.2:8001\"")
+            buildConfigField("String", "DEFAULT_RELAY_SERVER", "\"http://10.0.2.2:8002\"")
+            buildConfigField("Boolean", "IS_DEV_FLAVOR", "true")
+        }
+        create("prod") {
+            dimension = "environment"
+            buildConfigField("String", "DEFAULT_KEY_SERVER", "\"https://keys.khord.org\"")
+            buildConfigField("String", "DEFAULT_RELAY_SERVER", "\"https://relay.khord.org\"")
+            buildConfigField("Boolean", "IS_DEV_FLAVOR", "false")
+        }
+    }
+
     buildFeatures {
         compose = true
+        // Re-enabled so the per-flavor DEFAULT_KEY_SERVER / DEFAULT_RELAY_SERVER
+        // / IS_DEV_FLAVOR constants land in the generated BuildConfig class.
+        buildConfig = true
     }
 
     compileOptions {
