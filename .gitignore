@@ -67,3 +67,4 @@ docker-compose.override.yml
 # Logs
 *.log
 logs/
+SESSION_STATE.md
