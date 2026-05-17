@@ -16,6 +16,17 @@ import kotlinx.coroutines.sync.withLock
 import org.khord.android.AppContainer
 import org.khord.shared.protocol.orchestrator.MessageEntry
 
+/**
+ * Per-chat ViewModel. Owns the 5s fallback poll loop AND observes
+ * [AppContainer.pushConnected] so the poll can be suppressed when the
+ * push service has a healthy WebSocket for this fingerprint.
+ *
+ * The chat polling stays as a belt-and-braces fallback — if Android
+ * kills the foreground service (rare) or the WebSocket flaps, the
+ * 5s poll resumes and the user still gets messages. Pull-to-refresh
+ * is independent of either path.
+ */
+
 class ChatViewModel(
     private val contactFingerprint: String,
 ) : ViewModel() {
@@ -39,7 +50,14 @@ class ChatViewModel(
         if (pollJob?.isActive == true) return
         pollJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
-                fetchOnce()
+                // Suppress the 5s poll while the push service has a
+                // healthy WebSocket for this contact. If it goes
+                // unhealthy (or the service isn't running), the poll
+                // resumes automatically on the next loop iteration.
+                val pushAlive = contactFingerprint in AppContainer.pushConnected.value
+                if (!pushAlive) {
+                    fetchOnce()
+                }
                 delay(5_000)
             }
         }

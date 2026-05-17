@@ -38,6 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.khord.android.nav.Routes
@@ -47,11 +50,27 @@ import org.khord.android.util.TimestampFormat
 private const val RECENT_CHATS_LIMIT = 5
 private const val POLL_INTERVAL_MS = 10_000L
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showAll by remember { mutableStateOf(false) }
+
+    // Request POST_NOTIFICATIONS on Android 13+. The push service runs
+    // either way — without permission the user just doesn't see banners.
+    // Asking once when the user first reaches their contact list keeps the
+    // prompt away from the onboarding wizard but still happens before any
+    // contact has had a chance to send a message.
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        val notifPermission = rememberPermissionState(
+            android.Manifest.permission.POST_NOTIFICATIONS
+        )
+        LaunchedEffect(Unit) {
+            if (!notifPermission.status.isGranted) {
+                notifPermission.launchPermissionRequest()
+            }
+        }
+    }
 
     // Auto-poll while this screen is visible. Refresh on initial mount and
     // every 10 s thereafter; cancelled on dispose so background tabs don't

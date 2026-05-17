@@ -23,16 +23,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import org.khord.android.AppContainer
 import org.khord.android.nav.Routes
+import org.khord.android.push.PushServiceController
 import org.khord.android.ui.viewmodel.OnboardingViewModel
 
 @Composable
 fun RegistrationScreen(nav: NavController) {
     val vm = AppContainer.onboardingViewModel
+    val context = LocalContext.current
 
     // Re-entry path after a partial-registration crash: vm is null but
     // AppContainer.messaging is non-null with needsServerRegistration=true.
@@ -52,6 +55,7 @@ fun RegistrationScreen(nav: NavController) {
             LaunchedEffect(Unit) {
                 runCatching { recoveryMessaging.register(opkBatchSize = 50) }
                 if (!recoveryMessaging.needsServerRegistration) {
+                    PushServiceController.start(context.applicationContext)
                     nav.navigate(Routes.CONTACTS) {
                         popUpTo(Routes.SPLASH) { inclusive = true }
                     }
@@ -71,11 +75,13 @@ fun RegistrationScreen(nav: NavController) {
 @Composable
 private fun FreshOnboardingBody(vm: OnboardingViewModel, nav: NavController) {
     val status by vm.status.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var displayNameInput by remember { mutableStateOf("") }
 
     LaunchedEffect(status) {
         if (status is OnboardingViewModel.Status.Done) {
             AppContainer.onboardingViewModel = null
+            PushServiceController.start(context.applicationContext)
             nav.navigate(Routes.CONTACTS) {
                 popUpTo(Routes.WELCOME) { inclusive = true }
             }

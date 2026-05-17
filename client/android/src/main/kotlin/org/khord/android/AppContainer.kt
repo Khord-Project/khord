@@ -44,6 +44,18 @@ object AppContainer {
     @Volatile var messaging: Messaging? = null
 
     /**
+     * Set of contact fingerprints whose mailbox WebSocket is currently
+     * Connected. Updated by [org.khord.android.push.KhordPushService] as
+     * connections come and go. ViewModels observe this to suppress
+     * polling: when a fingerprint is in the set, push is delivering for
+     * that conversation and the 5s poll is redundant.
+     *
+     * Empty when the push service isn't running OR none of the WS
+     * connections have completed their auth handshake yet.
+     */
+    val pushConnected: MutableStateFlow<Set<String>> = MutableStateFlow(emptySet())
+
+    /**
      * Shared across the 3 onboarding screens (display → confirm → register)
      * so the user doesn't lose their phrase on back-navigation. Cleared
      * after a successful register().
@@ -117,6 +129,7 @@ object AppContainer {
         keyStore = null
         http = null
         onboardingViewModel = null
+        pushConnected.value = emptySet()
     }
 }
 

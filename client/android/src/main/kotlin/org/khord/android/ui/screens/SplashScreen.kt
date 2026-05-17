@@ -11,26 +11,36 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import org.khord.android.nav.Routes
+import org.khord.android.push.PushServiceController
 import org.khord.android.ui.viewmodel.SplashState
 import org.khord.android.ui.viewmodel.SplashViewModel
 
 @Composable
 fun SplashScreen(nav: NavController, vm: SplashViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     LaunchedEffect(state) {
         when (val s = state) {
             is SplashState.NeedsOnboarding ->
                 nav.navigate(Routes.WELCOME) { popUpTo(Routes.SPLASH) { inclusive = true } }
-            is SplashState.Loaded ->
+            is SplashState.Loaded -> {
+                // Returning user with a fully registered identity — fire up
+                // the push service so they receive notifications while the
+                // app is in the background. No-op if already running.
+                if (!s.needsServerRegistration) {
+                    PushServiceController.start(context.applicationContext)
+                }
                 nav.navigate(
                     if (s.needsServerRegistration) Routes.REGISTRATION else Routes.CONTACTS
                 ) { popUpTo(Routes.SPLASH) { inclusive = true } }
+            }
             else -> Unit
         }
     }

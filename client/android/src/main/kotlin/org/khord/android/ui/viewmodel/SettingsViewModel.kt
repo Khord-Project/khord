@@ -1,5 +1,6 @@
 package org.khord.android.ui.viewmodel
 
+import android.content.Context
 import android.os.Process
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -11,6 +12,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.khord.android.AppContainer
+import org.khord.android.push.PushServiceController
+import org.khord.shared.storage.PlatformContextProvider
 
 class SettingsViewModel : ViewModel() {
 
@@ -74,6 +77,13 @@ class SettingsViewModel : ViewModel() {
         _state.update { it.copy(wiping = true) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // Stop the push service first so the persistent notification
+                // disappears before the process kill and there's no chance
+                // of a final WS push firing receiveMessages() against an
+                // already-wiped persistence layer.
+                (PlatformContextProvider.get() as? Context)?.let {
+                    runCatching { PushServiceController.stop(it) }
+                }
                 AppContainer.messaging?.panic()
                 AppContainer.keyStore?.clear()
                 AppContainer.reset()

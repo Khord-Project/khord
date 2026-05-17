@@ -1,18 +1,24 @@
 package org.khord.android
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import org.khord.android.nav.Routes
+import org.khord.android.push.KhordNotifications
 import org.khord.android.ui.screens.AddContactScreen
 import org.khord.android.ui.screens.ChatScreen
 import org.khord.android.ui.screens.ContactListScreen
@@ -26,21 +32,56 @@ import org.khord.android.ui.screens.WelcomeScreen
 import org.khord.android.ui.theme.KhordTheme
 
 class MainActivity : ComponentActivity() {
+
+    /**
+     * Pending chat-deep-link fingerprint pulled from the launch intent.
+     * Read by [KhordNavGraph] in a LaunchedEffect once the NavHost is mounted.
+     * Wrapped in a Compose mutableStateOf so a fresh onNewIntent triggers
+     * navigation even when the Activity is already running (singleTop).
+     */
+    private val pendingDeepLinkFingerprint = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingDeepLinkFingerprint.value = extractDeepLinkFingerprint(intent)
         setContent {
             KhordTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    KhordNavGraph()
+                    KhordNavGraph(pendingDeepLinkFingerprint)
                 }
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingDeepLinkFingerprint.value = extractDeepLinkFingerprint(intent)
+    }
+
+    private fun extractDeepLinkFingerprint(intent: Intent?): String? =
+        intent?.getStringExtra(KhordNotifications.EXTRA_OPEN_CHAT_FINGERPRINT)
 }
 
 @Composable
-private fun KhordNavGraph() {
+private fun KhordNavGraph(
+    pendingDeepLinkFingerprint: androidx.compose.runtime.MutableState<String?>,
+) {
     val nav = rememberNavController()
+
+    // Respond to notification deep-links: when a fingerprint appears on
+    // the pending state, navigate to the chat. Consume the value so the
+    // same intent doesn't fire twice on configuration change.
+    LaunchedEffect(pendingDeepLinkFingerprint.value) {
+        val fp = pendingDeepLinkFingerprint.value ?: return@LaunchedEffect
+        pendingDeepLinkFingerprint.value = null
+        nav.navigate(Routes.chat(fp)) {
+            // Don't pile up duplicate chat instances if the user keeps
+            // tapping notifications.
+            launchSingleTop = true
+        }
+    }
+
     NavHost(navController = nav, startDestination = Routes.SPLASH) {
         composable(Routes.SPLASH) { SplashScreen(nav) }
         composable(Routes.WELCOME) { WelcomeScreen(nav) }

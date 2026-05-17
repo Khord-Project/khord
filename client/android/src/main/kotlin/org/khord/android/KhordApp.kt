@@ -30,5 +30,8 @@ class KhordApp : Application() {
         // Seed the theme StateFlow from SharedPreferences so the very first
         // composition shows the user's saved theme (no flash of default).
         AppContainer.loadInitialTheme(this)
+        // Ensure the notification channel exists before anything tries to
+        // post to it. Cheap, idempotent.
+        org.khord.android.push.KhordNotifications.ensureChannel(this)
     }
 }

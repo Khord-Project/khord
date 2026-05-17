@@ -1,5 +1,6 @@
 package org.khord.android.ui.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.khord.android.AppContainer
+import org.khord.android.push.PushServiceController
+import org.khord.shared.storage.PlatformContextProvider
 
 class ContactListViewModel : ViewModel() {
 
@@ -41,7 +44,16 @@ class ContactListViewModel : ViewModel() {
                 try {
                     val messaging = AppContainer.messaging ?: error("messaging not initialised")
                     if (pollServer) {
-                        messaging.pollPendingMailboxes()
+                        val newOnes = messaging.pollPendingMailboxes()
+                        if (newOnes.isNotEmpty()) {
+                            // New inbound mailboxes are now bound to contacts —
+                            // make sure the push service picks up WebSockets
+                            // for them right away rather than waiting for the
+                            // next process start.
+                            (PlatformContextProvider.get() as? Context)?.let { ctx ->
+                                runCatching { PushServiceController.refresh(ctx) }
+                            }
+                        }
                     }
                     val rows = messaging.contacts().map { contact ->
                         val history = messaging.messageHistory(contact.contactFingerprint)

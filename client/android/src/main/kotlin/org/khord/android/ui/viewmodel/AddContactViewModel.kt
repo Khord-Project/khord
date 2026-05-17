@@ -16,6 +16,9 @@ import kotlinx.coroutines.withContext
 import org.khord.android.AppContainer
 import org.khord.shared.protocol.KhordJson
 import org.khord.shared.protocol.wire.QrPayload
+import android.content.Context
+import org.khord.android.push.PushServiceController
+import org.khord.shared.storage.PlatformContextProvider
 
 class AddContactViewModel : ViewModel() {
 
@@ -63,6 +66,9 @@ class AddContactViewModel : ViewModel() {
                         val newContacts = messaging.pollPendingMailboxes()
                         if (newContacts.isNotEmpty()) {
                             _state.update { it.copy(newContactArrived = true) }
+                            // New inbound mailbox is now bound to a contact —
+                            // tell the push service to add a WebSocket for it.
+                            refreshPushService()
                         }
                     }
                 }
@@ -90,6 +96,18 @@ class AddContactViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Best-effort: ping the push service to refresh its subscription set.
+     * Reads the Application context from the same provider [SettingsViewModel]
+     * uses for panic. No-op if context is unavailable or the service isn't
+     * running yet.
+     */
+    private fun refreshPushService() {
+        (PlatformContextProvider.get() as? Context)?.let {
+            runCatching { PushServiceController.refresh(it) }
+        }
+    }
+
     /** Send the first message after a successful scan, completing the X3DH. */
     fun sendFirstMessage(contactFingerprint: String, firstMessage: String, onSent: (String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -104,6 +122,11 @@ class AddContactViewModel : ViewModel() {
                         myInboundMailboxId = myInbound,
                         firstMessage = firstMessage,
                     )
+                    // The pending mailbox just bound to a real contact —
+                    // refresh the push service so its WS picks the inbound
+                    // mailbox up immediately (rather than waiting for the
+                    // next process start).
+                    refreshPushService()
                     _state.update { it.copy(sending = false) }
                     // onSent typically calls NavController.navigate, which
                     // mutates LifecycleRegistry and asserts main-thread. We

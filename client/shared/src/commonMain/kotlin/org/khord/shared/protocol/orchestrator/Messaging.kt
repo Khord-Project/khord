@@ -767,6 +767,27 @@ class Messaging internal constructor(
     /** Public read of the current contact session list (live, in-memory). */
     fun contacts(): List<ContactSession> = sessionsByInboundMailbox.values.toList()
 
+    /**
+     * Snapshot the (mailbox, token, fingerprint, relay-URL) tuples needed
+     * to drive [org.khord.shared.protocol.client.PushSignalListener] —
+     * one per active contact session. Computed off the same map as
+     * [contacts]; safe to call from any thread that already has access
+     * to this [Messaging] instance.
+     *
+     * Exposed as a typed list rather than letting the caller reach into
+     * each [ContactSession] because [ContactSession.inboundBearerToken]
+     * is module-internal.
+     */
+    fun pushSubscriptions(): List<org.khord.shared.protocol.client.PushSignalListener.Subscription> =
+        sessionsByInboundMailbox.values.map {
+            org.khord.shared.protocol.client.PushSignalListener.Subscription(
+                contactFingerprint = it.contactFingerprint,
+                mailboxId = it.inboundMailboxId,
+                bearerToken = it.inboundBearerToken,
+                relayServerUrl = relayServerUrl,
+            )
+        }
+
     /** This user's own identity fingerprint. Stable across app launches. */
     val myFingerprint: String get() = identity.fingerprint
 

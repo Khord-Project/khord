@@ -3,6 +3,7 @@ package org.khord.shared.protocol
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.serialization.kotlinx.json.json
 
 /**
@@ -12,6 +13,9 @@ import io.ktor.serialization.kotlinx.json.json
  * `Darwin`, `Js`) according to their target. The shared module therefore
  * has no per-target `actual` declarations for the HTTP layer — only a
  * single `commonMain` factory that takes the engine as input.
+ *
+ * WebSockets is enabled so the same client handles both REST and the
+ * /v1/mailboxes/{id}/ws push channel — see [MailboxWebSocketClient].
  */
 fun khordHttpClient(engineFactory: HttpClientEngineFactory<*>): HttpClient =
     HttpClient(engineFactory) {
@@ -19,4 +23,5 @@ fun khordHttpClient(engineFactory: HttpClientEngineFactory<*>): HttpClient =
         install(ContentNegotiation) {
             json(KhordJson)
         }
+        install(WebSockets)
     }
