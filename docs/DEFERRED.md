@@ -1,15 +1,93 @@
 # Deferred Decisions
 
-This document tracks decisions that were explicitly deferred during the initial design phase. Each entry includes context on why it was deferred, what the trade-offs are, and any constraints on future implementation (i.e., things we must not do now that would block these later).
+Items the project knows about but isn't shipping yet. Each is tagged with a
+priority so future contributors (and future Tom) can tell what's blocking
+the next milestone vs. what's "someday":
 
-## Format
+  - **P1** — needed before wider beta (more than a handful of testers).
+  - **P2** — needed before public launch.
+  - **P3** — nice to have / future.
 
-Each entry follows:
-- **What:** The decision that was deferred
-- **Why deferred:** Why it's not needed for the PoC
-- **Trade-offs:** What we know about the options so far
-- **Blockers to avoid:** Things we must not do in the PoC that would make this harder later
-- **Trigger:** When this decision should be revisited
+The detailed `D-###` bodies further down in this file capture the
+reasoning, trade-offs, and what NOT to do that would block the future
+implementation. New short items live in the quick-reference table only;
+they get a full body once someone is actually ready to implement them.
+
+---
+
+## Quick reference
+
+### Protocol & crypto
+
+| ID | Priority | What | Where it was discussed |
+|---|---|---|---|
+| [D-013](#d-013-cross-implementation-x3dh-parity-test) | **P1** | Cross-implementation X3DH parity test (Khord vs. independent Python/PyNaCl + manual HKDF) — catches Khord-spec-level mistakes that internal Alice↔Bob tests can't | D-013 |
+| D-014 | **P2** | Key rotation / update protocol — let users rotate their identity key (compromise recovery) without forcing every contact to re-scan a QR | design discussion (post-audit prep) |
+| [D-009](#d-009-traffic-analysis-mitigations-level-3) | **P3** | Traffic-analysis resistance (Level 4b from threat model) — padding, decoy traffic, key pre-fetching, artificial delays | ADR 001 §threat model, D-009 |
+| D-015 | **P3** | Message reactions (👍 / ❤️ / etc.) — additive payload type, no protocol changes; read receipts deliberately **killed** for individual use, see D-006 | design discussion |
+| [D-012](#d-012-blocking--reporting) | **P2** | Contact blocking / muting — purely client-side stop-listening switch | D-012 |
+
+### Features
+
+| ID | Priority | What | Where it was discussed |
+|---|---|---|---|
+| [D-002](#d-002-group-messaging) | **P3** | Group messaging (Sender Keys or MLS, must re-key on member removal) | D-002 |
+| [D-003](#d-003-media--file-attachments) | **P3** | Media / file attachments (images, voice notes, documents) — encrypt-then-upload + reference in message | D-003 |
+| [D-007](#d-007-voice--video-calls) | **P3** | Voice / video calls — separate protocol layer (WebRTC, SRTP, TURN) | D-007 |
+| [D-001](#d-001-multi-device-sync) | **P3** | Multi-device sync (phone + laptop) — Signal Sesame model, per-device identities | D-001 |
+| D-016 | **P2** | Contact acceptance / rejection gate — accept-incoming UI before a brand-new contact's first message appears in the inbox | testing session |
+| D-017 | **P1** | Contact rename from within chat or contact details — currently the display name is only set by the contact's outgoing `reply_info` | testing session, commit `05d4906` |
+| D-018 | **P2** | Panic home-screen shortcut — long-press launcher icon → "Panic wipe" action, or a dedicated launcher activity | testing session |
+
+### Push notifications
+
+| ID | Priority | What | Where it was discussed |
+|---|---|---|---|
+| D-019 | **P2** | UnifiedPush as opt-in battery-efficient backend behind the existing push abstraction | ADR 013, ADR 022 |
+| [D-010](#d-010-fcm-push-notification-support) | **P3** | FCM as opt-in backend for Google Play builds | ADR 022, D-010 |
+
+### Infrastructure
+
+| ID | Priority | What | Where it was discussed |
+|---|---|---|---|
+| D-020 | **P1** | CI/CD pipeline — GitHub Actions → GHCR container images → Coolify auto-deploy webhook on tagged release | deploy session |
+| D-021 | **P1** | Server health monitoring + auto-restart — Prometheus or healthcheck-driven Coolify restart for keyserver/relayserver | deploy session |
+| D-022 | **P2** | Server health indicator in app Settings — "keys.khord.org: reachable, last seen 2 s ago" so the user knows whether a "couldn't send" failure is their network or the server | testing session |
+| D-023 | **P2** | Reproducible builds — deterministic APK build so users can verify their installed binary matches the published source (matters for privacy-promise apps) | design discussion |
+| D-024 | **P2** | Data processing commitment document for the community key + relay servers — what's logged, what's retained, jurisdiction, who operates it (this is the privacy-policy-shaped artifact users will ask for) | design discussion, D-008 governance |
+
+### Security
+
+| ID | Priority | What | Where it was discussed |
+|---|---|---|---|
+| D-025 | **P2** | Professional security audit before public production use — protocol, server code, client crypto, key handling | design discussion |
+| D-026 | **P1** | Rotate secrets that were printed in plaintext during Claude Code development sessions — `KEY_SERVER_TOKEN_SECRET`, key + relay DB passwords. Defensive: clients re-auth transparently on next 401 | session-state note, `SESSION_STATE.md` follow-up list |
+
+### Platform
+
+| ID | Priority | What | Where it was discussed |
+|---|---|---|---|
+| D-027 | **P3** | iOS client — KMP shared module already builds for iOS targets (commented out in `shared/build.gradle.kts`); needs a SwiftUI layer + Keychain-backed `KeyStore` actual | ADR 009 follow-up, `shared/build.gradle.kts:24-28` |
+| D-028 | **P2** | F-Droid metadata + listing — fastlane-style metadata directory and an F-Droid inclusion request | design discussion |
+| D-029 | **P3** | Google Play Store listing — store assets, content rating, FCM dependency (see D-010) | design discussion |
+
+### Documentation
+
+| ID | Priority | What | Where it was discussed |
+|---|---|---|---|
+| D-030 | **P2** | `CONTRIBUTING.md` documenting the development methodology — investigate-first discipline, ADR-driven design, human/AI collaboration model | design discussion, `docs/articles/architect-and-translator.md` |
+| D-031 | **P2** | GitHub organization `khord` created and `shandralor/khord` repo transferred — currently the repo lives on a personal account; an org is the right home before opening up contributions | design discussion |
+
+---
+
+## Format for detailed entries
+
+Each detailed entry follows:
+- **What:** the decision that was deferred
+- **Why deferred:** why it's not needed for the PoC
+- **Trade-offs:** what we know about the options so far
+- **Blockers to avoid:** things we must not do in the PoC that would make this harder later
+- **Trigger:** when this decision should be revisited
 
 ---
 
@@ -177,8 +255,8 @@ Threema's mediator server model was considered and rejected — it introduces a 
 **Trade-offs:** FCM with empty payloads (wake-up signal only) is a reasonable compromise for users who don't want to configure a UnifiedPush provider. Google knows the app received a ping but nothing about content or sender.
 
 **Blockers to avoid:**
-- The push notification interface must be abstracted (ADR 013) so FCM drops in as a second implementation
-- Do NOT hardcode UnifiedPush-specific logic outside the push abstraction layer
+- The push notification interface must be abstracted (ADR 013 + ADR 022) so FCM drops in as a second implementation
+- Do NOT hardcode UnifiedPush- or WebSocket-specific logic outside the push abstraction layer
 
 **Trigger:** When the app is distributed via Google Play Store alongside F-Droid.
 
