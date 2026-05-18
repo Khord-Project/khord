@@ -1,0 +1,29 @@
+-- Membership in a client-side group (ADR 023). The display_name comes
+-- from whoever last reported it inside an encrypted payload (initial
+-- group_invite list, or that member's own group_message reply_info).
+-- Empty string means "we don't know yet"; UI falls back to a truncated
+-- fingerprint in that case.
+CREATE TABLE group_member (
+    group_id      TEXT NOT NULL REFERENCES "group"(group_id) ON DELETE CASCADE,
+    fingerprint   TEXT NOT NULL,
+    display_name  TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (group_id, fingerprint)
+);
+
+CREATE INDEX group_member_by_group ON group_member(group_id);
+
+upsertGroupMember:
+INSERT OR REPLACE INTO group_member(group_id, fingerprint, display_name)
+VALUES (?, ?, ?);
+
+selectGroupMembers:
+SELECT fingerprint, display_name
+  FROM group_member
+ WHERE group_id = ?
+ ORDER BY fingerprint ASC;
+
+deleteGroupMember:
+DELETE FROM group_member WHERE group_id = ? AND fingerprint = ?;
+
+deleteAllGroupMembers:
+DELETE FROM group_member WHERE group_id = ?;

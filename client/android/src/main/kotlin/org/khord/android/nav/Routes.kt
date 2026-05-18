@@ -23,4 +23,12 @@ object Routes {
     // right ContactSession from the orchestrator.
     const val CHAT_PATTERN = "chat/{fingerprint}"
     fun chat(fingerprint: String): String = "chat/$fingerprint"
+
+    // Group routes (ADR 023). Group ID is a 32-char hex string so it's
+    // URL-safe by construction.
+    const val CREATE_GROUP = "groups/create"
+    const val GROUP_CHAT_PATTERN = "group/{groupId}"
+    fun groupChat(groupId: String): String = "group/$groupId"
+    const val GROUP_INFO_PATTERN = "group/{groupId}/info"
+    fun groupInfo(groupId: String): String = "group/$groupId/info"
 }

@@ -1,0 +1,32 @@
+-- Per-group message history (ADR 023). Distinct from the per-contact
+-- `message` table — group conversations live in their own log keyed by
+-- group_id, so members who later join don't accidentally inherit
+-- pre-join history. Cross-introduction (showing pre-join history to
+-- new members) is explicitly out of scope.
+CREATE TABLE group_message (
+    id                    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    group_id              TEXT    NOT NULL REFERENCES "group"(group_id) ON DELETE CASCADE,
+    sender_fingerprint    TEXT    NOT NULL,
+    sender_display_name   TEXT    NOT NULL DEFAULT '',
+    body                  TEXT    NOT NULL,
+    timestamp             TEXT    NOT NULL,
+    direction             TEXT    NOT NULL CHECK (direction IN ('sent', 'received')),
+    stored_at             TEXT    NOT NULL
+);
+
+CREATE INDEX group_message_by_group ON group_message(group_id, id);
+
+insertGroupMessage:
+INSERT INTO group_message(
+    group_id, sender_fingerprint, sender_display_name,
+    body, timestamp, direction, stored_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+
+selectGroupMessages:
+SELECT id, sender_fingerprint, sender_display_name, body, timestamp, direction, stored_at
+  FROM group_message
+ WHERE group_id = ?
+ ORDER BY id ASC;
+
+deleteGroupMessages:
+DELETE FROM group_message WHERE group_id = ?;

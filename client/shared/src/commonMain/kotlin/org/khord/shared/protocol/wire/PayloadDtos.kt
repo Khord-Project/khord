@@ -15,9 +15,23 @@ import kotlinx.serialization.Serializable
  *
  * The `type` field is mandatory (PROTOCOL.md §8 + ADR 015): unknown
  * types must be handled gracefully rather than crashing the receiver.
- * Khord PoC understands only `"text"`. For any other value, the orchestrator
- * raises [UnsupportedPayloadType] and the caller surfaces "unsupported
- * message type" to the user.
+ * Supported types in the PoC:
+ *   - `"text"`                 — one-to-one text message, uses [body]
+ *   - `"group_invite"`         — invitation to a client-side group
+ *                                (ADR 023). Uses [groupId], [groupName],
+ *                                [members].
+ *   - `"group_message"`        — text message addressed to a known group.
+ *                                Uses [groupId] + [body].
+ *   - `"group_member_added"`   — admin notifies existing members that
+ *                                someone new joined. Uses [groupId] +
+ *                                [added] (the new member).
+ *   - `"group_member_left"`    — a member left (or admin removed them).
+ *                                Uses [groupId] + [groupMemberFingerprint].
+ *   - `"group_name_changed"`   — admin renamed the group. Uses [groupId]
+ *                                + [groupName].
+ * Unknown types still raise [UnsupportedPayloadType] for the legacy
+ * one-to-one path; the group dispatch in receiveMessages routes by
+ * `type` BEFORE the text-only path runs.
  *
  * Field naming: KhordJson sets `JsonNamingStrategy.SnakeCase` globally,
  * so `replyInfo` serialises as `reply_info`, `relayServer` as
@@ -28,7 +42,7 @@ internal data class InnerPayload(
     val version: Int = 1,
     val type: String,
     val timestamp: String,        // ISO 8601 / RFC 3339, client-generated
-    val body: String? = null,     // present for type="text"; future types may use other fields
+    val body: String? = null,     // present for type="text" and "group_message"
     /**
      * How the recipient can reply to me — encrypted, never seen by the
      * relay server (it sits inside the AEAD ciphertext). On the X3DH
@@ -39,6 +53,28 @@ internal data class InnerPayload(
      * relay-server migration self-heals on the next inbound message.
      */
     val replyInfo: ReplyInfo? = null,
+
+    // ── Group fields (ADR 023). Optional on every type; semantics depend
+    // on `type`. All group_* messages travel through existing pairwise
+    // Double Ratchet channels — the Relay Server never learns the
+    // group exists.
+
+    /** Group identifier (32 hex chars). Present on every group_* type. */
+    val groupId: String? = null,
+    /** Group display name. Present on `group_invite` and `group_name_changed`. */
+    val groupName: String? = null,
+    /** Full membership list. Present on `group_invite` only. */
+    val members: List<GroupMember>? = null,
+    /** Newly-added member. Present on `group_member_added` only. */
+    val added: GroupMember? = null,
+    /**
+     * Fingerprint of the member who left. Present on `group_member_left`.
+     * Serialises as `group_member_fingerprint` (snake_case) — distinct
+     * from `reply_info.fingerprint` (which is the SENDER's fingerprint,
+     * not the leaver's; admins kicking someone need to point at a
+     * DIFFERENT fingerprint than their own).
+     */
+    val groupMemberFingerprint: String? = null,
 )
 
 /**
@@ -58,4 +94,17 @@ internal data class ReplyInfo(
     val keyServer: String,      // Sender's key-server base URL
     val fingerprint: String,    // Sender's identity fingerprint (hex sha256 of ik_a)
     val displayName: String,    // Sender's chosen display name (or "Anonymous")
+)
+
+/**
+ * One entry in a [InnerPayload.members] list (ADR 023). Carries just
+ * enough for a recipient to know who to display in the group UI; the
+ * display name is the sender's best knowledge and may be stale
+ * (recipients self-heal as the named member's own messages arrive
+ * carrying fresher reply_info.displayName).
+ */
+@Serializable
+internal data class GroupMember(
+    val fingerprint: String,
+    val displayName: String,
 )

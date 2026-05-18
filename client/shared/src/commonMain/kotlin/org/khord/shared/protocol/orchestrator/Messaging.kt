@@ -22,6 +22,7 @@ import org.khord.shared.protocol.client.Mailboxes
 import org.khord.shared.protocol.client.PowMiner
 import org.khord.shared.protocol.client.RelayServerClient
 import org.khord.shared.protocol.wire.BundleUploadRequest
+import org.khord.shared.protocol.wire.GroupMember as WireGroupMember
 import org.khord.shared.protocol.wire.InnerPayload
 import org.khord.shared.protocol.wire.OneTimePreKeyDto
 import org.khord.shared.protocol.wire.QrPayload
@@ -29,6 +30,9 @@ import org.khord.shared.protocol.wire.ReplyInfo
 import org.khord.shared.protocol.wire.SignedPreKeyDto
 import org.khord.shared.protocol.wire.WireEnvelope
 import org.khord.shared.storage.ContactInfo
+import org.khord.shared.storage.GroupMemberRecord
+import org.khord.shared.storage.GroupMessageRecord
+import org.khord.shared.storage.GroupRecord
 
 /**
  * High-level Khord messaging — what app code interacts with.
@@ -587,7 +591,11 @@ class Messaging internal constructor(
 
     /**
      * Poll my inbound mailbox for messages from this contact. Returns the
-     * decrypted plaintexts in sequence order. Acks the highest sequence.
+     * decrypted plaintexts of TEXT messages in sequence order — group
+     * messages and group-management payloads (ADR 023) are processed via
+     * their own side-effect paths (group_messages table, in-memory
+     * group state) and are NOT included in the returned list. The
+     * highest sequence is acked regardless of payload type.
      */
     suspend fun receiveMessages(contact: ContactSession): List<String> {
         checkAlive()
@@ -612,12 +620,10 @@ class Messaging internal constructor(
                 InnerPayload.serializer(),
                 plaintextBytes.decodeToString(),
             )
-            val text = decodeInnerPayloadText(payload)
-            plaintexts += text
 
-            // Self-healing display-name update: if the contact's encrypted
-            // reply_info reports a different name than we have stored, update.
-            // No-ops when name is unchanged (the common case).
+            // Self-healing display-name update applies to every payload
+            // type — runs before the dispatch so group_* payloads also
+            // refresh the sender's name.
             payload.replyInfo?.let { ri ->
                 val current = contactsByFingerprint[contact.contactFingerprint]
                 if (current != null && current.displayName != ri.displayName) {
@@ -630,12 +636,30 @@ class Messaging internal constructor(
                 }
             }
 
-            persistence.saveMessage(
-                contactFingerprint = contact.contactFingerprint,
-                direction = org.khord.shared.storage.MessageDirection.RECEIVED,
-                body = text,
-                timestamp = payload.timestamp,
-            )
+            // Dispatch by payload type. Group payloads (ADR 023) take the
+            // group path; everything else falls through to the legacy
+            // text path (where unknown types still raise
+            // UnsupportedPayloadType, preserving the original contract).
+            when (payload.type) {
+                "group_invite" -> handleGroupInvite(contact, payload)
+                "group_message" -> handleGroupMessage(contact, payload)
+                "group_member_added" -> handleGroupMemberAdded(contact, payload)
+                "group_member_left" -> handleGroupMemberLeft(contact, payload)
+                "group_name_changed" -> handleGroupNameChanged(contact, payload)
+                else -> {
+                    // Legacy one-to-one text path. decodeInnerPayloadText
+                    // throws on unknown types, which is the documented
+                    // forward-compat behaviour.
+                    val text = decodeInnerPayloadText(payload)
+                    plaintexts += text
+                    persistence.saveMessage(
+                        contactFingerprint = contact.contactFingerprint,
+                        direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+                        body = text,
+                        timestamp = payload.timestamp,
+                    )
+                }
+            }
         }
 
         val highestSequence = fetched.last().sequence
@@ -648,6 +672,391 @@ class Messaging internal constructor(
         persistence.updateLastFetchedSequence(contact.contactFingerprint, highestSequence)
         persistSession(contact)
         return plaintexts
+    }
+
+    // ── Groups (ADR 023) ────────────────────────────────────────────────────
+
+    /**
+     * Create a new group on this device and fan out invitations to every
+     * member via their existing pairwise channels. Returns the generated
+     * `group_id` (32-char hex).
+     *
+     * The caller (Alice) becomes the admin. Each member's QR must have
+     * been scanned beforehand (so a [ContactSession] exists in
+     * [sessionsByInboundMailbox]); invitations to members without an
+     * active session are silently skipped — the group will exist on
+     * Alice's device with the missing member listed, but messages will
+     * never reach them. See ADR 023 for the cross-introduction note.
+     */
+    suspend fun createGroup(
+        groupName: String,
+        memberFingerprints: List<String>,
+    ): String {
+        checkAlive()
+        require(groupName.isNotBlank()) { "groupName must be non-blank" }
+        val distinct = memberFingerprints
+            .distinct()
+            .filter { it != identity.fingerprint } // self is added separately
+
+        val groupId = newGroupId()
+
+        // Persist locally first — admin's view exists even if fan-out
+        // partially fails.
+        persistence.saveGroup(
+            groupId = groupId,
+            groupName = groupName,
+            createdByFingerprint = identity.fingerprint,
+            isAdmin = true,
+        )
+        persistence.addGroupMember(groupId, identity.fingerprint, displayName)
+        for (fp in distinct) {
+            val theirName = contactsByFingerprint[fp]?.displayName ?: ""
+            persistence.addGroupMember(groupId, fp, theirName)
+        }
+
+        // Build the full membership list (including self) once — every
+        // invite recipient gets the same view.
+        val fullMembers = buildList {
+            add(WireGroupMember(identity.fingerprint, displayName))
+            for (fp in distinct) {
+                add(WireGroupMember(
+                    fingerprint = fp,
+                    displayName = contactsByFingerprint[fp]?.displayName ?: "",
+                ))
+            }
+        }
+
+        // Fan out the invites via each member's pairwise channel.
+        for (fp in distinct) {
+            val contact = sessionForFingerprint(fp) ?: continue
+            sendGroupInnerPayload(
+                contact = contact,
+                payload = InnerPayload(
+                    type = "group_invite",
+                    timestamp = Clock.System.now().toString(),
+                    replyInfo = myReplyInfo(contact.inboundMailboxId),
+                    groupId = groupId,
+                    groupName = groupName,
+                    members = fullMembers,
+                ),
+            )
+        }
+
+        return groupId
+    }
+
+    /**
+     * Send a text message to every member of [groupId] via their pairwise
+     * channels. The message is also saved locally as a `sent` group
+     * message so it appears in the sender's own group chat history.
+     *
+     * Fan-out cost: O(N) ratchet encryptions + O(N) relay POSTs, one per
+     * member with an active [ContactSession]. Members without a session
+     * are silently skipped (per ADR 023).
+     */
+    suspend fun sendGroupMessage(groupId: String, text: String) {
+        checkAlive()
+        require(text.isNotBlank()) { "text must be non-blank" }
+        val group = persistence.loadGroup(groupId)
+            ?: throw IllegalStateException("unknown groupId: $groupId")
+        val members = persistence.loadGroupMembers(groupId)
+            .filter { it.fingerprint != identity.fingerprint }
+
+        val timestamp = Clock.System.now().toString()
+        for (m in members) {
+            val contact = sessionForFingerprint(m.fingerprint) ?: continue
+            sendGroupInnerPayload(
+                contact = contact,
+                payload = InnerPayload(
+                    type = "group_message",
+                    timestamp = timestamp,
+                    body = text,
+                    replyInfo = myReplyInfo(contact.inboundMailboxId),
+                    groupId = groupId,
+                ),
+            )
+        }
+
+        persistence.saveGroupMessage(
+            groupId = groupId,
+            senderFingerprint = identity.fingerprint,
+            senderDisplayName = displayName,
+            body = text,
+            timestamp = timestamp,
+            direction = org.khord.shared.storage.MessageDirection.SENT,
+        )
+        // Read-mod-write: groupName access not needed here, but keep
+        // `group` local in case future logic on this branch needs it.
+        check(group.groupId == groupId)
+    }
+
+    /**
+     * Admin-only: add a new member to an existing group. Sends
+     * `group_invite` to the newcomer (their first view of the group)
+     * AND `group_member_added` to every existing member so they update
+     * their local list. Non-admin callers throw.
+     */
+    suspend fun addGroupMember(groupId: String, fingerprint: String) {
+        checkAlive()
+        require(fingerprint != identity.fingerprint) { "cannot add self" }
+        val group = persistence.loadGroup(groupId)
+            ?: throw IllegalStateException("unknown groupId: $groupId")
+        check(group.isAdmin) { "only the admin can add members" }
+
+        val existingMembers = persistence.loadGroupMembers(groupId)
+        if (existingMembers.any { it.fingerprint == fingerprint }) {
+            // Already a member — no-op.
+            return
+        }
+        val newName = contactsByFingerprint[fingerprint]?.displayName ?: ""
+        persistence.addGroupMember(groupId, fingerprint, newName)
+
+        // Build full membership including the new arrival for the invite.
+        val fullMembers = (existingMembers +
+            GroupMemberRecord(fingerprint, newName))
+            .map { WireGroupMember(it.fingerprint, it.displayName) }
+
+        // Send invite to the new member.
+        sessionForFingerprint(fingerprint)?.let { contact ->
+            sendGroupInnerPayload(
+                contact = contact,
+                payload = InnerPayload(
+                    type = "group_invite",
+                    timestamp = Clock.System.now().toString(),
+                    replyInfo = myReplyInfo(contact.inboundMailboxId),
+                    groupId = groupId,
+                    groupName = group.groupName,
+                    members = fullMembers,
+                ),
+            )
+        }
+
+        // Notify existing members (excluding self and the newcomer).
+        val notifyTimestamp = Clock.System.now().toString()
+        for (m in existingMembers) {
+            if (m.fingerprint == identity.fingerprint) continue
+            val contact = sessionForFingerprint(m.fingerprint) ?: continue
+            sendGroupInnerPayload(
+                contact = contact,
+                payload = InnerPayload(
+                    type = "group_member_added",
+                    timestamp = notifyTimestamp,
+                    replyInfo = myReplyInfo(contact.inboundMailboxId),
+                    groupId = groupId,
+                    added = WireGroupMember(fingerprint, newName),
+                ),
+            )
+        }
+    }
+
+    /**
+     * Leave a group. Sends `group_member_left` (with own fingerprint)
+     * to every member, then deletes the group locally. Available to
+     * any member, admin or not — when the admin leaves, the group
+     * continues to exist on members' devices but has no admin
+     * (subsequent add/rename operations from anyone will be ignored
+     * by every other member's auth gate).
+     */
+    suspend fun leaveGroup(groupId: String) {
+        checkAlive()
+        val group = persistence.loadGroup(groupId)
+            ?: throw IllegalStateException("unknown groupId: $groupId")
+        val members = persistence.loadGroupMembers(groupId)
+            .filter { it.fingerprint != identity.fingerprint }
+
+        val timestamp = Clock.System.now().toString()
+        for (m in members) {
+            val contact = sessionForFingerprint(m.fingerprint) ?: continue
+            sendGroupInnerPayload(
+                contact = contact,
+                payload = InnerPayload(
+                    type = "group_member_left",
+                    timestamp = timestamp,
+                    replyInfo = myReplyInfo(contact.inboundMailboxId),
+                    groupId = groupId,
+                    groupMemberFingerprint = identity.fingerprint,
+                ),
+            )
+        }
+        persistence.deleteGroup(groupId)
+        check(group.groupId == groupId) // touch group to silence unused var
+    }
+
+    /** Snapshot the local view of a group (returns null if unknown). */
+    suspend fun groupSnapshot(groupId: String): GroupEntry? =
+        persistence.loadGroup(groupId)?.toEntry()
+
+    /** Members of a group, as the local device sees them. */
+    suspend fun groupMembers(groupId: String): List<GroupMemberEntry> =
+        persistence.loadGroupMembers(groupId).map { it.toEntry() }
+
+    /** Full message history for a group. */
+    suspend fun groupMessageHistory(groupId: String): List<GroupMessageEntry> =
+        persistence.loadGroupMessages(groupId).map { it.toEntry() }
+
+    /** Every group known to this device. */
+    suspend fun allGroups(): List<GroupEntry> =
+        persistence.loadGroups().map { it.toEntry() }
+
+    // ── Group internals ─────────────────────────────────────────────────────
+
+    /**
+     * Encrypt + send an [InnerPayload] of any group_* type over the
+     * existing pairwise Double Ratchet channel for [contact]. Mirrors
+     * the encrypt/envelope/relay path of [sendMessage] but does NOT
+     * touch the per-contact `message` table — group payloads are stored
+     * separately (see [saveGroupMessage]) or live as in-memory
+     * state-machine events (member-add, leave, rename).
+     */
+    private suspend fun sendGroupInnerPayload(
+        contact: ContactSession,
+        payload: InnerPayload,
+    ): Long {
+        val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
+            .encodeToByteArray()
+        val encrypted = contact.session.encrypt(plaintextBytes)
+        val envelope = WireEnvelope.Ratchet(
+            header = Base64Std.encode(encrypted.headerBytes),
+            ciphertext = Base64Std.encode(encrypted.ciphertext),
+        )
+        val envelopeBytes = KhordJson
+            .encodeToString(WireEnvelope.serializer(), envelope as WireEnvelope)
+            .encodeToByteArray()
+        val rs = if (contact.outboundRelayServer == relayServerUrl) {
+            rsClient
+        } else {
+            RelayServerClient(http, contact.outboundRelayServer)
+        }
+        val sequence = rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
+        persistSession(contact)
+        return sequence
+    }
+
+    /**
+     * `reply_info` block carrying this user's coordinates + display name
+     * — every outbound payload includes it (one-to-one or group).
+     */
+    private fun myReplyInfo(inboundMailbox: String): ReplyInfo =
+        ReplyInfo(
+            mailbox = inboundMailbox,
+            relayServer = relayServerUrl,
+            keyServer = keyServerUrl,
+            fingerprint = identity.fingerprint,
+            displayName = displayName,
+        )
+
+    /** Find an active ContactSession by fingerprint, or null if not friends. */
+    private fun sessionForFingerprint(fp: String): ContactSession? =
+        sessionsByInboundMailbox.values.firstOrNull { it.contactFingerprint == fp }
+
+    /**
+     * Group payload dispatch helpers — invoked from [receiveMessages]
+     * when the decoded payload's `type` matches a group_* discriminator.
+     * Each handler is responsible for applying the side effect; the
+     * outer loop still acks the message regardless.
+     */
+    private suspend fun handleGroupInvite(
+        contact: ContactSession,
+        payload: InnerPayload,
+    ) {
+        val groupId = payload.groupId ?: return
+        val groupName = payload.groupName ?: return
+        val membersList = payload.members ?: return
+        // Sender becomes the creator (admin) on the recipient's view.
+        val createdBy = contact.contactFingerprint
+        persistence.saveGroup(
+            groupId = groupId,
+            groupName = groupName,
+            createdByFingerprint = createdBy,
+            isAdmin = false,
+        )
+        for (m in membersList) {
+            persistence.addGroupMember(groupId, m.fingerprint, m.displayName)
+        }
+        // Make sure self is on the list — defensive; the inviter SHOULD
+        // include us already.
+        persistence.addGroupMember(groupId, identity.fingerprint, displayName)
+    }
+
+    private suspend fun handleGroupMessage(
+        contact: ContactSession,
+        payload: InnerPayload,
+    ) {
+        val groupId = payload.groupId ?: return
+        val body = payload.body ?: return
+        // Drop messages for groups we don't know about — likely the
+        // invite arrived out of order or never reached us.
+        val group = persistence.loadGroup(groupId) ?: return
+        check(group.groupId == groupId)
+        val senderName = payload.replyInfo?.displayName
+            ?: contactsByFingerprint[contact.contactFingerprint]?.displayName
+            ?: ""
+        persistence.saveGroupMessage(
+            groupId = groupId,
+            senderFingerprint = contact.contactFingerprint,
+            senderDisplayName = senderName,
+            body = body,
+            timestamp = payload.timestamp,
+            direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+        )
+        // Also keep the per-member display_name in sync — fresh info.
+        if (senderName.isNotEmpty()) {
+            persistence.addGroupMember(
+                groupId = groupId,
+                fingerprint = contact.contactFingerprint,
+                displayName = senderName,
+            )
+        }
+    }
+
+    private suspend fun handleGroupMemberAdded(
+        contact: ContactSession,
+        payload: InnerPayload,
+    ) {
+        val groupId = payload.groupId ?: return
+        val added = payload.added ?: return
+        val group = persistence.loadGroup(groupId) ?: return
+        // Admin-auth gate: ignore unless the sender is the group's admin.
+        if (contact.contactFingerprint != group.createdByFingerprint) return
+        persistence.addGroupMember(groupId, added.fingerprint, added.displayName)
+    }
+
+    private suspend fun handleGroupMemberLeft(
+        contact: ContactSession,
+        payload: InnerPayload,
+    ) {
+        val groupId = payload.groupId ?: return
+        val leaverFp = payload.groupMemberFingerprint ?: return
+        val group = persistence.loadGroup(groupId) ?: return
+        // Two legit cases: leaver is leaving themselves, OR admin is
+        // removing a member. Otherwise ignore.
+        val isSelfLeave = leaverFp == contact.contactFingerprint
+        val isAdminRemove = contact.contactFingerprint == group.createdByFingerprint
+        if (!isSelfLeave && !isAdminRemove) return
+        persistence.removeGroupMember(groupId, leaverFp)
+    }
+
+    private suspend fun handleGroupNameChanged(
+        contact: ContactSession,
+        payload: InnerPayload,
+    ) {
+        val groupId = payload.groupId ?: return
+        val newName = payload.groupName ?: return
+        val group = persistence.loadGroup(groupId) ?: return
+        if (contact.contactFingerprint != group.createdByFingerprint) return
+        persistence.updateGroupName(groupId, newName)
+    }
+
+    /**
+     * Generate a fresh group id: 16 random bytes hex-encoded → 32 chars.
+     * Doesn't need to be cryptographically secret (group_id is shared
+     * with members) but should be globally unique with overwhelming
+     * probability. `Random.nextBytes` is good enough — collisions across
+     * 16 bytes are astronomically unlikely.
+     */
+    private fun newGroupId(): String {
+        val bytes = kotlin.random.Random.nextBytes(16)
+        return bytes.joinToString("") { ((it.toInt() and 0xff)).toString(16).padStart(2, '0') }
     }
 
     // ─── internals ────────────────────────────────────────────────────────
@@ -907,6 +1316,56 @@ data class MessageEntry(
 ) {
     enum class Direction { SENT, RECEIVED }
 }
+
+// ── Group public DTOs (ADR 023) ──────────────────────────────────────────────
+// Same pattern as MessageEntry: the storage layer's records are internal;
+// the orchestrator re-maps to these public types so the Android module
+// can read them without breaking module-visibility rules.
+
+data class GroupEntry(
+    val groupId: String,
+    val groupName: String,
+    val createdByFingerprint: String,
+    val isAdmin: Boolean,
+    val createdAt: String,
+)
+
+data class GroupMemberEntry(
+    val fingerprint: String,
+    val displayName: String,
+)
+
+data class GroupMessageEntry(
+    val id: Long,
+    val senderFingerprint: String,
+    val senderDisplayName: String,
+    val body: String,
+    val timestamp: String,
+    val direction: MessageEntry.Direction,
+)
+
+internal fun org.khord.shared.storage.GroupRecord.toEntry(): GroupEntry =
+    GroupEntry(
+        groupId = groupId,
+        groupName = groupName,
+        createdByFingerprint = createdByFingerprint,
+        isAdmin = isAdmin,
+        createdAt = createdAt,
+    )
+
+internal fun org.khord.shared.storage.GroupMemberRecord.toEntry(): GroupMemberEntry =
+    GroupMemberEntry(fingerprint = fingerprint, displayName = displayName)
+
+internal fun org.khord.shared.storage.GroupMessageRecord.toEntry(): GroupMessageEntry =
+    GroupMessageEntry(
+        id = id,
+        senderFingerprint = senderFingerprint,
+        senderDisplayName = senderDisplayName,
+        body = body,
+        timestamp = timestamp,
+        direction = if (direction == org.khord.shared.storage.MessageDirection.SENT)
+            MessageEntry.Direction.SENT else MessageEntry.Direction.RECEIVED,
+    )
 
 // Tiny helper: exposed only so Messaging can validate QR payload bindings without
 // re-implementing the SHA-256-and-hex pipeline. Using fromHex() here would defeat

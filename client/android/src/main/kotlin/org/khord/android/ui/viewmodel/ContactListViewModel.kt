@@ -17,8 +17,15 @@ import org.khord.shared.storage.PlatformContextProvider
 
 class ContactListViewModel : ViewModel() {
 
+    /**
+     * Unified row type — the screen renders contacts and groups in the
+     * same list, distinguished by [kind]. The `id` carries either a
+     * contact fingerprint (Contact) or a groupId (Group); the screen
+     * routes on click accordingly.
+     */
     data class Row(
-        val fingerprint: String,
+        val id: String,
+        val kind: Kind,
         val displayLabel: String,
         val lastMessageBody: String?,
         val lastTimestamp: String?,
@@ -28,9 +35,18 @@ class ContactListViewModel : ViewModel() {
          * (per the AppContainer counter map). The screen renders such
          * rows muted — clickable, but visually de-emphasised so the
          * user notices something's off without having to open the chat.
+         *
+         * Only meaningful for [Kind.Contact]. Groups don't have a
+         * single dead-side signal — they're considered available if
+         * the user can see them locally.
          */
         val unavailable: Boolean = false,
-    )
+    ) {
+        enum class Kind { Contact, Group }
+
+        /** Convenience: contact fingerprint, only valid for Contact rows. */
+        val fingerprint: String get() = id
+    }
 
     data class UiState(
         val rows: List<Row> = emptyList(),
@@ -61,6 +77,7 @@ class ContactListViewModel : ViewModel() {
     private fun reapplyUnavailable(failures: Map<String, Int>) {
         _state.update { ui ->
             ui.copy(rows = ui.rows.map { row ->
+                if (row.kind != Row.Kind.Contact) return@map row
                 val isUnavailable = (failures[row.fingerprint] ?: 0) >=
                     AppContainer.DEAD_CONTACT_THRESHOLD
                 if (row.unavailable == isUnavailable) row
@@ -89,7 +106,7 @@ class ContactListViewModel : ViewModel() {
                         }
                     }
                     val failures = AppContainer.contactReceiveFailures.value
-                    val rows = messaging.contacts().map { contact ->
+                    val contactRows = messaging.contacts().map { contact ->
                         val history = messaging.messageHistory(contact.contactFingerprint)
                         val last = history.lastOrNull()
                         val name = messaging.contactDisplayName(contact.contactFingerprint)
@@ -102,13 +119,33 @@ class ContactListViewModel : ViewModel() {
                         val isUnavailable = (failures[contact.contactFingerprint] ?: 0) >=
                             AppContainer.DEAD_CONTACT_THRESHOLD
                         Row(
-                            fingerprint = contact.contactFingerprint,
+                            id = contact.contactFingerprint,
+                            kind = Row.Kind.Contact,
                             displayLabel = label,
                             lastMessageBody = last?.body,
                             lastTimestamp = last?.timestamp,
                             unavailable = isUnavailable,
                         )
                     }
+                    // Groups (ADR 023) — listed alongside contacts. Last
+                    // message preview is "Sender: body" so it's obvious at
+                    // a glance who in the group just spoke.
+                    val groupRows = messaging.allGroups().map { g ->
+                        val history = messaging.groupMessageHistory(g.groupId)
+                        val last = history.lastOrNull()
+                        val preview = last?.let { lm ->
+                            val who = lm.senderDisplayName.ifEmpty { "?" }
+                            "$who: ${lm.body}"
+                        }
+                        Row(
+                            id = g.groupId,
+                            kind = Row.Kind.Group,
+                            displayLabel = g.groupName,
+                            lastMessageBody = preview,
+                            lastTimestamp = last?.timestamp,
+                        )
+                    }
+                    val rows = contactRows + groupRows
                     // Recent-first ordering: contacts WITH a last message sorted
                     // by timestamp descending; contacts with no messages yet trail
                     // at the bottom (they're new QR-only entries waiting for the

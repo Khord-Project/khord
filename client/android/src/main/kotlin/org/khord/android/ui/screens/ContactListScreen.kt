@@ -1,6 +1,8 @@
 package org.khord.android.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,13 +11,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -24,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -50,11 +57,18 @@ import org.khord.android.util.TimestampFormat
 private const val RECENT_CHATS_LIMIT = 5
 private const val POLL_INTERVAL_MS = 10_000L
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalPermissionsApi::class,
+    ExperimentalFoundationApi::class,
+)
 @Composable
 fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showAll by remember { mutableStateOf(false) }
+    // Long-press on the FAB surfaces a "create group" choice in addition
+    // to the normal "add contact" action.
+    var showFabMenu by remember { mutableStateOf(false) }
 
     // Request POST_NOTIFICATIONS on Android 13+. The push service runs
     // either way — without permission the user just doesn't see banners.
@@ -97,8 +111,17 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { nav.navigate(Routes.ADD_CONTACT) }) {
-                Icon(Icons.Default.Add, contentDescription = "Add contact")
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .combinedClickable(
+                        onClick = { nav.navigate(Routes.ADD_CONTACT) },
+                        onLongClick = { showFabMenu = true },
+                    ),
+            ) {
+                FloatingActionButton(onClick = { nav.navigate(Routes.ADD_CONTACT) }) {
+                    Icon(Icons.Default.Add, contentDescription = "Add contact")
+                }
             }
         },
     ) { innerPadding ->
@@ -110,10 +133,52 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
                     rows = state.rows,
                     showAll = showAll,
                     onToggleShowAll = { showAll = !showAll },
-                    onRowClick = { fp -> nav.navigate(Routes.chat(fp)) },
+                    onRowClick = { row ->
+                        when (row.kind) {
+                            ContactListViewModel.Row.Kind.Contact ->
+                                nav.navigate(Routes.chat(row.id))
+                            ContactListViewModel.Row.Kind.Group ->
+                                nav.navigate(Routes.groupChat(row.id))
+                        }
+                    },
                 )
             }
         }
+    }
+
+    if (showFabMenu) {
+        AlertDialog(
+            onDismissRequest = { showFabMenu = false },
+            title = { Text("Create") },
+            text = {
+                Column {
+                    Text(
+                        "Add contact — scan a QR code or paste a contact link.",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showFabMenu = false
+                                nav.navigate(Routes.ADD_CONTACT)
+                            }
+                            .padding(vertical = 12.dp),
+                    )
+                    HorizontalDivider()
+                    Text(
+                        "New group — pick contacts to invite.",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showFabMenu = false
+                                nav.navigate(Routes.CREATE_GROUP)
+                            }
+                            .padding(vertical = 12.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showFabMenu = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -145,7 +210,7 @@ private fun RecentChats(
     rows: List<ContactListViewModel.Row>,
     showAll: Boolean,
     onToggleShowAll: () -> Unit,
-    onRowClick: (String) -> Unit,
+    onRowClick: (ContactListViewModel.Row) -> Unit,
 ) {
     // Section header — always shown above the list.
     Column(modifier = Modifier.fillMaxSize()) {
@@ -159,7 +224,7 @@ private fun RecentChats(
 
         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
             items(visible) { row ->
-                ConversationRow(row, onClick = { onRowClick(row.fingerprint) })
+                ConversationRow(row, onClick = { onRowClick(row) })
                 HorizontalDivider()
             }
             if (rows.size > RECENT_CHATS_LIMIT) {
@@ -204,6 +269,14 @@ private fun ConversationRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(
+            imageVector = if (row.kind == ContactListViewModel.Row.Kind.Group)
+                Icons.Default.Group else Icons.Default.Person,
+            contentDescription = if (row.kind == ContactListViewModel.Row.Kind.Group)
+                "Group" else "Contact",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(28.dp).padding(end = 12.dp),
+        )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 row.displayLabel,

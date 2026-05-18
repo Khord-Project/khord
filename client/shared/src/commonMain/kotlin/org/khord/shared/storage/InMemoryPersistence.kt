@@ -21,6 +21,12 @@ internal class InMemoryPersistence : Persistence {
     private var nextMessageId = 1L
     private var keyServerToken: KeyServerTokenRecord? = null
 
+    // ── Group state (ADR 023) ───────────────────────────────────────────────
+    private val groups = mutableMapOf<String, GroupRecord>()
+    private val groupMembers = mutableMapOf<String, MutableMap<String, String>>() // groupId → fingerprint → displayName
+    private val groupMessages = mutableListOf<Pair<String, GroupMessageRecord>>()
+    private var nextGroupMessageId = 1L
+
     override suspend fun loadIdentity(): IdentityRecord? = identity
     override suspend fun saveIdentity(record: IdentityRecord) { identity = record }
     override suspend fun markRegisteredAtServer() {
@@ -101,6 +107,79 @@ internal class InMemoryPersistence : Persistence {
     override suspend fun loadMessages(contactFingerprint: String): List<StoredMessage> =
         messages.filter { it.first == contactFingerprint }.map { it.second }.sortedBy { it.id }
 
+    // ── Groups (ADR 023) ────────────────────────────────────────────────────
+
+    override suspend fun saveGroup(
+        groupId: String,
+        groupName: String,
+        createdByFingerprint: String,
+        isAdmin: Boolean,
+    ) {
+        val existing = groups[groupId]
+        groups[groupId] = GroupRecord(
+            groupId = groupId,
+            groupName = groupName,
+            createdByFingerprint = createdByFingerprint,
+            isAdmin = isAdmin,
+            createdAt = existing?.createdAt ?: Clock.System.now().toString(),
+        )
+    }
+
+    override suspend fun loadGroups(): List<GroupRecord> =
+        groups.values.sortedBy { it.createdAt }
+
+    override suspend fun loadGroup(groupId: String): GroupRecord? = groups[groupId]
+
+    override suspend fun updateGroupName(groupId: String, newName: String) {
+        groups[groupId]?.let { groups[groupId] = it.copy(groupName = newName) }
+    }
+
+    override suspend fun deleteGroup(groupId: String) {
+        groups.remove(groupId)
+        groupMembers.remove(groupId)
+        groupMessages.removeAll { it.first == groupId }
+    }
+
+    override suspend fun addGroupMember(
+        groupId: String,
+        fingerprint: String,
+        displayName: String,
+    ) {
+        groupMembers.getOrPut(groupId) { mutableMapOf() }[fingerprint] = displayName
+    }
+
+    override suspend fun removeGroupMember(groupId: String, fingerprint: String) {
+        groupMembers[groupId]?.remove(fingerprint)
+    }
+
+    override suspend fun loadGroupMembers(groupId: String): List<GroupMemberRecord> =
+        groupMembers[groupId].orEmpty().entries
+            .map { GroupMemberRecord(it.key, it.value) }
+            .sortedBy { it.fingerprint }
+
+    override suspend fun saveGroupMessage(
+        groupId: String,
+        senderFingerprint: String,
+        senderDisplayName: String,
+        body: String,
+        timestamp: String,
+        direction: MessageDirection,
+    ) {
+        val msg = GroupMessageRecord(
+            id = nextGroupMessageId++,
+            senderFingerprint = senderFingerprint,
+            senderDisplayName = senderDisplayName,
+            body = body,
+            timestamp = timestamp,
+            direction = direction,
+            storedAt = Clock.System.now().toString(),
+        )
+        groupMessages += groupId to msg
+    }
+
+    override suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord> =
+        groupMessages.filter { it.first == groupId }.map { it.second }.sortedBy { it.id }
+
     override suspend fun saveKeyServerToken(token: String, expiresAt: String) {
         keyServerToken = KeyServerTokenRecord(token, expiresAt)
     }
@@ -117,6 +196,10 @@ internal class InMemoryPersistence : Persistence {
         messages.clear()
         nextMessageId = 1L
         keyServerToken = null
+        groups.clear()
+        groupMembers.clear()
+        groupMessages.clear()
+        nextGroupMessageId = 1L
     }
 
     override suspend fun close() {

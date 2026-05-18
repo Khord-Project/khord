@@ -77,6 +77,54 @@ internal interface Persistence {
     )
     suspend fun loadMessages(contactFingerprint: String): List<StoredMessage>
 
+    // ── Groups (ADR 023) ────────────────────────────────────────────────────
+    //
+    // Client-side group state. The Relay Server has no concept of groups;
+    // every group operation fans out via per-member pairwise Double Ratchet
+    // channels. Each device maintains its own view of the group; consistency
+    // depends on message delivery.
+
+    /**
+     * Upsert a group row. `isAdmin` is true for the local user when they
+     * created the group; false on every receiving member's device.
+     */
+    suspend fun saveGroup(
+        groupId: String,
+        groupName: String,
+        createdByFingerprint: String,
+        isAdmin: Boolean,
+    )
+
+    suspend fun loadGroups(): List<GroupRecord>
+
+    suspend fun loadGroup(groupId: String): GroupRecord?
+
+    suspend fun updateGroupName(groupId: String, newName: String)
+
+    /** Remove a group + cascade-delete its members + messages. */
+    suspend fun deleteGroup(groupId: String)
+
+    /**
+     * Upsert a member row (group_id, fingerprint) — display_name may be
+     * updated by a later call when fresher info arrives via reply_info.
+     */
+    suspend fun addGroupMember(groupId: String, fingerprint: String, displayName: String)
+
+    suspend fun removeGroupMember(groupId: String, fingerprint: String)
+
+    suspend fun loadGroupMembers(groupId: String): List<GroupMemberRecord>
+
+    suspend fun saveGroupMessage(
+        groupId: String,
+        senderFingerprint: String,
+        senderDisplayName: String,
+        body: String,
+        timestamp: String,
+        direction: MessageDirection,
+    )
+
+    suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord>
+
     // ── Key-server token cache ─────────────────────────────────────────────
 
     suspend fun saveKeyServerToken(token: String, expiresAt: String)
@@ -163,4 +211,29 @@ internal data class StoredMessage(
 internal data class KeyServerTokenRecord(
     val token: String,
     val expiresAt: String,
+)
+
+// ── Group records (ADR 023) ──────────────────────────────────────────────────
+
+internal data class GroupRecord(
+    val groupId: String,
+    val groupName: String,
+    val createdByFingerprint: String,
+    val isAdmin: Boolean,
+    val createdAt: String,
+)
+
+internal data class GroupMemberRecord(
+    val fingerprint: String,
+    val displayName: String,
+)
+
+internal data class GroupMessageRecord(
+    val id: Long,
+    val senderFingerprint: String,
+    val senderDisplayName: String,
+    val body: String,
+    val timestamp: String,
+    val direction: MessageDirection,
+    val storedAt: String,
 )

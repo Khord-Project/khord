@@ -255,6 +255,116 @@ internal class DbPersistence(
             )
         }
 
+    // ── Groups (ADR 023) ────────────────────────────────────────────────────
+
+    override suspend fun saveGroup(
+        groupId: String,
+        groupName: String,
+        createdByFingerprint: String,
+        isAdmin: Boolean,
+    ) {
+        // Preserve created_at on upsert by reading the existing row first.
+        val existing = db.groupQueries.selectGroup(groupId).executeAsOneOrNull()
+        db.groupQueries.upsertGroup(
+            group_id = groupId,
+            group_name = groupName,
+            created_by_fingerprint = createdByFingerprint,
+            is_admin = if (isAdmin) 1L else 0L,
+            created_at = existing?.created_at ?: now(),
+        )
+    }
+
+    override suspend fun loadGroups(): List<GroupRecord> =
+        db.groupQueries.selectAllGroups().executeAsList().map {
+            GroupRecord(
+                groupId = it.group_id,
+                groupName = it.group_name,
+                createdByFingerprint = it.created_by_fingerprint,
+                isAdmin = it.is_admin != 0L,
+                createdAt = it.created_at,
+            )
+        }
+
+    override suspend fun loadGroup(groupId: String): GroupRecord? =
+        db.groupQueries.selectGroup(groupId).executeAsOneOrNull()?.let {
+            GroupRecord(
+                groupId = it.group_id,
+                groupName = it.group_name,
+                createdByFingerprint = it.created_by_fingerprint,
+                isAdmin = it.is_admin != 0L,
+                createdAt = it.created_at,
+            )
+        }
+
+    override suspend fun updateGroupName(groupId: String, newName: String) {
+        db.groupQueries.updateGroupName(newName, groupId)
+    }
+
+    override suspend fun deleteGroup(groupId: String) {
+        // Explicit transactional delete of messages + members + the group
+        // row. The schema declares ON DELETE CASCADE on the FKs, but
+        // SQLite enforces those only when `PRAGMA foreign_keys=ON` is
+        // active on the connection running the parent delete — and
+        // JDBC connection-pool behaviour means we can't fully rely on
+        // the pragma sticking across statements. Doing the deletes
+        // explicitly in a transaction makes the contract independent
+        // of FK pragma state.
+        db.transaction {
+            db.groupMessageQueries.deleteGroupMessages(groupId)
+            db.groupMemberQueries.deleteAllGroupMembers(groupId)
+            db.groupQueries.deleteGroup(groupId)
+        }
+    }
+
+    override suspend fun addGroupMember(
+        groupId: String,
+        fingerprint: String,
+        displayName: String,
+    ) {
+        db.groupMemberQueries.upsertGroupMember(groupId, fingerprint, displayName)
+    }
+
+    override suspend fun removeGroupMember(groupId: String, fingerprint: String) {
+        db.groupMemberQueries.deleteGroupMember(groupId, fingerprint)
+    }
+
+    override suspend fun loadGroupMembers(groupId: String): List<GroupMemberRecord> =
+        db.groupMemberQueries.selectGroupMembers(groupId).executeAsList().map {
+            GroupMemberRecord(it.fingerprint, it.display_name)
+        }
+
+    override suspend fun saveGroupMessage(
+        groupId: String,
+        senderFingerprint: String,
+        senderDisplayName: String,
+        body: String,
+        timestamp: String,
+        direction: MessageDirection,
+    ) {
+        db.groupMessageQueries.insertGroupMessage(
+            group_id = groupId,
+            sender_fingerprint = senderFingerprint,
+            sender_display_name = senderDisplayName,
+            body = body,
+            timestamp = timestamp,
+            direction = direction.wire,
+            stored_at = now(),
+        )
+    }
+
+    override suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord> =
+        db.groupMessageQueries.selectGroupMessages(groupId).executeAsList().map {
+            GroupMessageRecord(
+                id = it.id,
+                senderFingerprint = it.sender_fingerprint,
+                senderDisplayName = it.sender_display_name,
+                body = it.body,
+                timestamp = it.timestamp,
+                direction = directionFromWire(it.direction),
+                storedAt = it.stored_at,
+            )
+        }
+
     // ── Token cache ─────────────────────────────────────────────────────────
 
     override suspend fun saveKeyServerToken(token: String, expiresAt: String) {
