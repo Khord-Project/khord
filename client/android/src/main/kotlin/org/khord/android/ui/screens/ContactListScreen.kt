@@ -1,8 +1,6 @@
 package org.khord.android.ui.screens
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,10 +17,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -29,8 +28,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -60,15 +59,11 @@ private const val POLL_INTERVAL_MS = 10_000L
 @OptIn(
     ExperimentalMaterial3Api::class,
     ExperimentalPermissionsApi::class,
-    ExperimentalFoundationApi::class,
 )
 @Composable
 fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showAll by remember { mutableStateOf(false) }
-    // Long-press on the FAB surfaces a "create group" choice in addition
-    // to the normal "add contact" action.
-    var showFabMenu by remember { mutableStateOf(false) }
 
     // Request POST_NOTIFICATIONS on Android 13+. The push service runs
     // either way — without permission the user just doesn't see banners.
@@ -111,14 +106,18 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
             )
         },
         floatingActionButton = {
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .combinedClickable(
-                        onClick = { nav.navigate(Routes.ADD_CONTACT) },
-                        onLongClick = { showFabMenu = true },
-                    ),
-            ) {
+            // Two stacked FABs: the smaller "New group" sits above the
+            // primary "Add contact". Both are always visible — the
+            // earlier long-press-on-FAB approach didn't fire because
+            // FloatingActionButton's own onClick intercepts touches
+            // before any parent gesture detector sees them.
+            Column(horizontalAlignment = Alignment.End) {
+                SmallFloatingActionButton(
+                    onClick = { nav.navigate(Routes.CREATE_GROUP) },
+                ) {
+                    Icon(Icons.Default.GroupAdd, contentDescription = "New group")
+                }
+                Spacer(Modifier.height(12.dp))
                 FloatingActionButton(onClick = { nav.navigate(Routes.ADD_CONTACT) }) {
                     Icon(Icons.Default.Add, contentDescription = "Add contact")
                 }
@@ -144,41 +143,6 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
                 )
             }
         }
-    }
-
-    if (showFabMenu) {
-        AlertDialog(
-            onDismissRequest = { showFabMenu = false },
-            title = { Text("Create") },
-            text = {
-                Column {
-                    Text(
-                        "Add contact — scan a QR code or paste a contact link.",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                showFabMenu = false
-                                nav.navigate(Routes.ADD_CONTACT)
-                            }
-                            .padding(vertical = 12.dp),
-                    )
-                    HorizontalDivider()
-                    Text(
-                        "New group — pick contacts to invite.",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                showFabMenu = false
-                                nav.navigate(Routes.CREATE_GROUP)
-                            }
-                            .padding(vertical = 12.dp),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showFabMenu = false }) { Text("Cancel") }
-            },
-        )
     }
 }
 
