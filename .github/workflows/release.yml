@@ -1,0 +1,135 @@
+name: Release
+
+# Triggered by pushing a tag matching v* (e.g. v0.1.0, v0.1.0-alpha,
+# v1.2.3-beta.4). Runs all tests, builds the prod APK, then attaches
+# the APK to a fresh GitHub Release auto-generated from the tag.
+# Tags containing `alpha` or `beta` are marked as prereleases — the
+# `latest` redirect on the Releases page skips prereleases, so stable
+# vN.M.K tags become "latest" automatically.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# A release needs write permission to push the GitHub Release and
+# upload assets via the GITHUB_TOKEN.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Test, build, and release
+    runs-on: ubuntu-latest
+
+    services:
+      keyserver-db:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: khord_ks
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: khord_keyserver
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+      relayserver-db:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: khord_rs
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: khord_relayserver
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── JVM + shared tests ────────────────────────────────────────────
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Run shared:jvmTest
+        working-directory: client
+        run: ./gradlew :shared:jvmTest --no-daemon
+
+      # ── Server tests ──────────────────────────────────────────────────
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            servers/keyserver/requirements.txt
+            servers/relayserver/requirements.txt
+
+      - name: Install keyserver dependencies
+        working-directory: servers/keyserver
+        run: pip install -r requirements.txt
+
+      - name: Run keyserver tests
+        working-directory: servers/keyserver
+        env:
+          DATABASE_URL: postgresql+asyncpg://khord_ks:test@localhost:5433/khord_keyserver
+          KEY_SERVER_TOKEN_SECRET: test-secret-do-not-use-in-production
+        run: pytest tests -q
+
+      - name: Install relayserver dependencies
+        working-directory: servers/relayserver
+        run: pip install -r requirements.txt
+
+      - name: Apply relayserver schema (alembic upgrade head)
+        working-directory: servers/relayserver
+        env:
+          DATABASE_URL: postgresql+asyncpg://khord_rs:test@localhost:5434/khord_relayserver
+        run: alembic upgrade head
+
+      - name: Run relayserver tests
+        working-directory: servers/relayserver
+        env:
+          DATABASE_URL: postgresql+asyncpg://khord_rs:test@localhost:5434/khord_relayserver
+        run: pytest tests -q
+
+      # ── Android build ────────────────────────────────────────────────
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build prod debug APK
+        working-directory: client
+        run: ./gradlew :android:assembleProdDebug --no-daemon
+
+      # ── Release ──────────────────────────────────────────────────────
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: client/android/build/outputs/apk/prod/debug/android-prod-debug.apk
+          # Tags containing `alpha` or `beta` are prereleases. Stable
+          # tags (e.g. v0.1.0) are not, so they become /releases/latest.
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+          # Auto-generate release notes from commits + PRs since the
+          # previous tag. The release title falls back to the tag name
+          # by default.
+          generate_release_notes: true
+          # Fail the workflow if the APK file isn't found at the
+          # expected path (defensive — better to fail loudly than
+          # silently ship an empty release).
+          fail_on_unmatched_files: true
