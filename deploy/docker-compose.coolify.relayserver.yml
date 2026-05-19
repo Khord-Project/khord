@@ -1,0 +1,58 @@
+# Khord Relay Server — standalone Coolify compose (ADR 024).
+#
+# This file deploys ONLY the Relay Server + its Postgres. The Key Server
+# lives in its own Coolify application via `docker-compose.coolify.
+# keyserver.yml`. See the keyserver compose's header comment and ADR
+# 024 for the rationale behind splitting the combined stack into two
+# independent applications.
+#
+# Differences from the combined `docker-compose.coolify.yml`:
+#   - Only one server + one DB. No keyserver services in this file.
+#   - The DB user/name/volume are `khord_rs` / `khord_relayserver` /
+#     `relayserver_data` rather than the combined stack's `relayserver`
+#     names. **First-deploy creates an empty DB** — see ADR 024's
+#     migration playbook for keeping or migrating existing data.
+#
+# Deployment via Coolify UI: see the "Coolify: Split Deployment
+# (recommended)" section of README.md in this directory.
+
+services:
+  relayserver:
+    build:
+      # Repo-root-relative — see the equivalent comment on the
+      # keyserver compose.
+      context: ./servers/relayserver
+    environment:
+      - DATABASE_URL=postgresql://khord_rs:${RELAYSERVER_DB_PASSWORD}@relayserver-db:5432/khord_relayserver
+      # The .env file uses RELAY_-prefixed names for clarity; the
+      # relay server's pydantic-settings reads the unprefixed field
+      # names. Rebind here so no server-side code change is required.
+      - PROOF_OF_WORK_DIFFICULTY_BITS=${RELAY_PROOF_OF_WORK_DIFFICULTY_BITS:-16}
+      - MESSAGE_TTL_SECONDS=${RELAY_MESSAGE_TTL_SECONDS:-604800}
+      # ↓ Coolify magic. Bare name, no value, list-form required.
+      - SERVICE_FQDN_RELAYSERVER_8000
+    depends_on:
+      relayserver-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  relayserver-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: khord_rs
+      POSTGRES_PASSWORD: ${RELAYSERVER_DB_PASSWORD}
+      POSTGRES_DB: khord_relayserver
+    volumes:
+      - relayserver_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U khord_rs"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  relayserver_data:

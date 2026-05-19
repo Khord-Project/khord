@@ -55,6 +55,7 @@ they get a full body once someone is actually ready to implement them.
 | D-022 | **P2** | Server health indicator in app Settings — "keys.khord.org: reachable, last seen 2 s ago" so the user knows whether a "couldn't send" failure is their network or the server | testing session |
 | D-023 | **P2** | Reproducible builds — deterministic APK build so users can verify their installed binary matches the published source (matters for privacy-promise apps) | design discussion |
 | D-024 | **P2** | Data processing commitment document for the community key + relay servers — what's logged, what's retained, jurisdiction, who operates it (this is the privacy-policy-shaped artifact users will ask for) | design discussion, D-008 governance |
+| D-032 | **P1** | Migrate the production Coolify deployment from the legacy combined-stack application to two separate split applications per ADR 024 — compose files + env templates are committed, the cutover (backup volumes → deploy two new apps → verify → delete old combined app) still has to happen on the live `apps1.mikro.events` instance. Eliminates the recurring gotcha-#6 stop+start-after-every-deploy dance. | ADR 024, recurring gotcha #6 |
 
 ### Security
 

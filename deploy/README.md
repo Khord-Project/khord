@@ -183,18 +183,150 @@ docker run --rm -v khord_caddy_data:/to -v /tmp:/from alpine \
 ## Coolify Deployment
 
 [Coolify](https://coolify.io) provides Traefik with automatic Let's
-Encrypt TLS in front of every resource it deploys, so
-`docker-compose.coolify.yml` omits the Caddy service that the
+Encrypt TLS in front of every resource it deploys, so the Coolify
+compose files in this directory omit the Caddy service that the
 standalone stack bundles. This section is both a UI-driven happy-path
 guide and a list of the specific pitfalls we hit during the first real
 deployment — each with the symptom you'd observe and how to fix it.
 
-If you want the short version: **use `https://` URLs in the per-service
-domain config** and **don't change the magic env-var declaration in the
-compose file** — those two are by far the most common ways this goes
-wrong.
+There are **two ways** to deploy Khord on Coolify:
 
-### Quick start (Coolify UI)
+  - **Split deployment (recommended).** Two separate Coolify
+    applications — one for the Key Server, one for the Relay Server
+    — each with its own single-service compose file. This is the
+    decision in ADR 024. Eliminates the shared-bridge race condition
+    that left one service stranded with a stale network attachment
+    after every redeploy on the combined stack (see gotcha #6 in the
+    deploy-pitfalls section below). Use this for fresh deployments.
+
+  - **Combined deployment (legacy).** A single Coolify application
+    running both servers from `docker-compose.coolify.yml`. Kept for
+    backward compatibility with existing deployments. Suffers from
+    the gotcha-#6 stop+start dance after every rebuild. Not
+    recommended for new deployments. The migration playbook from
+    combined to split is in ADR 024.
+
+If you want the short version of either path: **use `https://` URLs
+in the per-service domain config** and **don't change the magic
+env-var declaration in the compose file** — those two are by far the
+most common ways this goes wrong.
+
+### Coolify: Split Deployment (recommended)
+
+Two separate Coolify applications, each pointing at the same Git
+repository but with a different compose file path. Each app has its
+own env vars, its own domain, its own volume — no shared state
+between them at the Coolify level. This mirrors the split-trust
+architecture at the deploy layer: the Key Server and Relay Server are
+operated independently in production, just as they're trusted
+independently at the protocol level.
+
+**Why this is the recommended path:**
+
+  - **No shared-bridge race.** Each app's containers are recreated
+    independently. A redeploy of one server can't disturb the other's
+    network attachment.
+  - **Cleaner blast radius.** A bad config or stuck container on the
+    Relay Server doesn't take the Key Server down with it during the
+    "Removing old containers" phase of a Coolify deploy.
+  - **Different operators possible.** Future-proofs the deployment
+    for the "key server run by org X, relay server run by org Y"
+    pattern that ADR 002 envisions.
+  - **Simpler troubleshooting.** Logs, metrics, and the Coolify
+    dashboard each show one server at a time.
+
+**The trade-off:** two applications to configure in the Coolify UI
+instead of one, and a one-time first-deploy initialises empty
+databases (no data carries over from a previous combined deployment
+unless you do the migration playbook in ADR 024).
+
+#### Key Server application
+
+1. **Create a Docker Compose application** in Coolify pointing at
+   this repo (or a fork). Branch: `main`. Name it `khord-keyserver`
+   or similar.
+2. **Compose file path**: `deploy/docker-compose.coolify.keyserver.yml`.
+3. **Environment Variables** — paste from
+   `.env.coolify.keyserver.example`:
+
+   | Variable | Generate | Notes |
+   |---|---|---|
+   | `KEY_SERVER_TOKEN_SECRET` | `openssl rand -hex 32` | HMAC-SHA256 secret for session tokens |
+   | `KEYSERVER_DB_PASSWORD` | `openssl rand -hex 24` | Postgres pw — pick before first deploy (volume bakes it in) |
+
+4. **Domains** — for the `keyserver` service:
+
+   | Domain (must include scheme) | Port |
+   |---|---|
+   | `https://keys.khord.org` | `8000` |
+
+5. **Deploy.** Builds the keyserver image, brings up its Postgres,
+   runs `alembic upgrade head`, routes via Traefik. ~60 s.
+6. **Verify**: `curl https://keys.khord.org/v1/health` → `{"status":"ok"}`
+
+#### Relay Server application
+
+Repeat the process in a second Coolify application:
+
+1. **Create a Docker Compose application** in Coolify pointing at the
+   same repo. Name it `khord-relayserver` or similar.
+2. **Compose file path**: `deploy/docker-compose.coolify.relayserver.yml`.
+3. **Environment Variables** — paste from
+   `.env.coolify.relayserver.example`:
+
+   | Variable | Generate | Notes |
+   |---|---|---|
+   | `RELAYSERVER_DB_PASSWORD` | `openssl rand -hex 24` | Postgres pw |
+   | `RELAY_PROOF_OF_WORK_DIFFICULTY_BITS` | `16` | ADR 012 tunable |
+   | `RELAY_MESSAGE_TTL_SECONDS` | `604800` | 7 days |
+
+4. **Domains** — for the `relayserver` service:
+
+   | Domain (must include scheme) | Port |
+   |---|---|
+   | `https://relay.khord.org` | `8000` |
+
+5. **Deploy.**
+6. **Verify**: `curl https://relay.khord.org/v1/health` → `{"status":"ok"}`
+
+#### Shared considerations
+
+  - **No env-var overlap.** The Key Server app has no
+    `RELAYSERVER_DB_PASSWORD`; the Relay Server app has no
+    `KEY_SERVER_TOKEN_SECRET`. Pasting a var into the wrong app is
+    harmless (unused) but a leak of `KEY_SERVER_TOKEN_SECRET` into
+    the relay app's environment widens its blast radius unnecessarily.
+  - **No coordinated downtime.** Deploying or restarting the Key
+    Server has zero effect on the Relay Server, and vice versa.
+  - **Webhook delivery** is per-application — both apps point at the
+    same repo, so the same `git push` will trigger both to redeploy.
+    For a server-side change that only touches one server, **disable
+    auto-deploy on the other** to avoid the unnecessary rebuild +
+    momentary downtime window.
+  - **Migrating from the combined stack to split** — see ADR 024 for
+    the cutover playbook (backup volumes → deploy new apps → verify
+    → delete old combined app). The compose files in this directory
+    use distinct volume names (`keyserver_data`, `relayserver_data`)
+    versus the combined stack's `keyserver_db_data` /
+    `relayserver_db_data`, so the two can coexist briefly during the
+    cutover.
+
+### Coolify: Combined Deployment (legacy)
+
+A single Coolify application running both servers from
+`docker-compose.coolify.yml`. Kept for backward compatibility with
+deployments already on this layout. New deployments should use the
+split path above.
+
+The known failure mode of this layout is gotcha #6 below — after
+every redeploy of the combined stack, one of the two services
+silently ends up with a stale Docker network attachment that Traefik
+can't reach. The workaround is to manually Stop+Start the
+application in the Coolify UI (Restart alone doesn't fix it — full
+container recreate is needed). Annoying but reliable; takes ~30 s
+per deploy.
+
+#### Quick start (Coolify UI, combined stack)
 
 1. **Create a Docker Compose application** in Coolify pointing at this
    repo (or a fork). Branch: `main` (or whichever you deploy from).
@@ -234,6 +366,9 @@ wrong.
    curl https://keys.khord.org/v1/health   # → {"status":"ok"}
    curl https://relay.khord.org/v1/health  # → {"status":"ok"}
    ```
+
+   If one of the two times out (gotcha #6), Stop+Start the application
+   in the Coolify UI — see "Pitfall: gotcha #6" below.
 
 ### Configuration reference
 

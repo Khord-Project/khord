@@ -1,0 +1,63 @@
+# Khord Key Server — standalone Coolify compose (ADR 024).
+#
+# This file deploys ONLY the Key Server + its Postgres. The Relay Server
+# lives in its own Coolify application via `docker-compose.coolify.
+# relayserver.yml`. Two separate Coolify applications, each with its
+# own compose stack, was chosen over a single combined stack to
+# eliminate the shared-bridge race condition that put one service in a
+# stale-network-attachment state on every redeploy (see ADR 024 and
+# the "Stop+start, not restart" entry in the Coolify gotchas memory).
+#
+# Differences from the combined `docker-compose.coolify.yml`:
+#   - Only one server + one DB. No relay services in this file.
+#   - The DB user/name/volume are `khord_ks` / `khord_keyserver` /
+#     `keyserver_data` rather than the combined stack's `keyserver`
+#     names. Reason: deploying both stacks side-by-side during the
+#     migration cutover requires distinct volume names so Coolify
+#     doesn't merge them. **First-deploy creates an empty DB** — the
+#     migration is NOT zero-data-loss. For the early PoC stage with no
+#     production users this is acceptable; see ADR 024 for the
+#     migration playbook including the volume-rename path.
+#
+# Deployment via Coolify UI: see the "Coolify: Split Deployment
+# (recommended)" section of README.md in this directory.
+
+services:
+  keyserver:
+    build:
+      # Repo-root-relative, NOT deploy/-relative. Coolify invokes
+      # `docker compose --project-directory <repo-root> -f deploy/...`,
+      # so relative paths resolve against the repo root.
+      context: ./servers/keyserver
+    environment:
+      - DATABASE_URL=postgresql://khord_ks:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/khord_keyserver
+      - KEY_SERVER_TOKEN_SECRET=${KEY_SERVER_TOKEN_SECRET}
+      # ↓ Coolify magic. Bare name, no value. List form is required —
+      # see the combined compose for the full reasoning (gotcha #2 in
+      # the Coolify gotchas memory).
+      - SERVICE_FQDN_KEYSERVER_8000
+    depends_on:
+      keyserver-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  keyserver-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: khord_ks
+      POSTGRES_PASSWORD: ${KEYSERVER_DB_PASSWORD}
+      POSTGRES_DB: khord_keyserver
+    volumes:
+      - keyserver_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U khord_ks"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  keyserver_data:
