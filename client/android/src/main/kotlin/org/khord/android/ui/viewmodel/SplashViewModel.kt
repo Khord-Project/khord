@@ -1,6 +1,7 @@
 package org.khord.android.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -9,13 +10,28 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.khord.android.AppContainer
+import org.khord.android.ServerUrls
 import org.khord.android.util.UpdateChecker
 import org.khord.shared.crypto.Crypto
+import java.io.File
 
 sealed interface SplashState {
     data object Working : SplashState
-    /** No identity persisted — go to onboarding. */
-    data object NeedsOnboarding : SplashState
+    /**
+     * No identity persisted — go to onboarding.
+     *
+     * [previouslySetUp] is true when bootstrap found leftover state
+     * (the database file or the Keystore-backed prefs blob) but
+     * couldn't load an identity. On MIUI / Xiaomi this is the
+     * "battery saver cleared our data" path; the splash screen
+     * uses it to offer a diagnostic report before sending the
+     * user to Welcome.
+     */
+    data class NeedsOnboarding(
+        val previouslySetUp: Boolean = false,
+        val dbFileExists: Boolean = false,
+        val prefsHaveBlob: Boolean = false,
+    ) : SplashState
     /** Identity loaded; routing target depends on registeredAtServer. */
     data class Loaded(val needsServerRegistration: Boolean) : SplashState
     data class Failed(val message: String) : SplashState
@@ -30,14 +46,25 @@ class SplashViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 Crypto.ensureInitialized()
-                val loaded = AppContainer.bootstrap(getApplication())
+                val application: Application = getApplication()
+                val loaded = AppContainer.bootstrap(application)
                 _state.value = if (loaded) {
                     SplashState.Loaded(
                         needsServerRegistration =
                             AppContainer.messaging?.needsServerRegistration ?: false,
                     )
                 } else {
-                    SplashState.NeedsOnboarding
+                    val dbFileExists = File(
+                        application.getDatabasePath(ServerUrls.DB_NAME).absolutePath,
+                    ).exists()
+                    val prefsHaveBlob = application
+                        .getSharedPreferences("khord_keystore_blob", Context.MODE_PRIVATE)
+                        .getString("iv", null) != null
+                    SplashState.NeedsOnboarding(
+                        previouslySetUp = dbFileExists || prefsHaveBlob,
+                        dbFileExists = dbFileExists,
+                        prefsHaveBlob = prefsHaveBlob,
+                    )
                 }
                 // Bootstrap finished — AppContainer.http is now set.
                 // Fire the GitHub Releases check once per cold start.

@@ -68,6 +68,10 @@ fun BugReportDialog(
     error: Throwable?,
     preBuiltReport: BugReporter.Report? = null,
     onDismiss: () -> Unit,
+    title: String = "Something went wrong",
+    explanation: String? = null,
+    sendLabel: String = "Send Report",
+    dismissLabel: String = "Dismiss",
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -99,7 +103,7 @@ fun BugReportDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Something went wrong") },
+        title = { Text(title) },
         text = {
             // Allow the whole body to scroll — long stack traces in the
             // expanded preview can overflow on small screens.
@@ -107,12 +111,12 @@ fun BugReportDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
             ) {
                 if (report == null) {
-                    Text("No error details available.")
+                    Text(explanation ?: "No error details available.")
                     return@Column
                 }
 
                 Text(
-                    report.errorMessage,
+                    explanation ?: report.errorMessage,
                     style = MaterialTheme.typography.bodyMedium,
                 )
 
@@ -212,13 +216,13 @@ fun BugReportDialog(
                                 ).show()
                             }
                         }
-                    }) { Text("Send Report") }
+                    }) { Text(sendLabel) }
                 }
                 else -> Unit
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Dismiss") }
+            TextButton(onClick = onDismiss) { Text(dismissLabel) }
         },
     )
 }

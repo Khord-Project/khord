@@ -102,10 +102,11 @@ private fun KhordNavGraph(
                 "This conversation is no longer available.",
                 Toast.LENGTH_SHORT,
             ).show()
-            // Fall back to the contact list. popUpTo on Splash so the back
-            // stack doesn't leak the (now-gone) chat route.
+            // Fall back to the contact list. Clear the entire back stack
+            // — leaking the (now-gone) chat route, or Splash, would let
+            // the user back-button into broken states.
             nav.navigate(Routes.CONTACTS) {
-                popUpTo(Routes.SPLASH) { inclusive = false }
+                popUpTo(nav.graph.startDestinationId) { inclusive = true }
                 launchSingleTop = true
             }
         }
