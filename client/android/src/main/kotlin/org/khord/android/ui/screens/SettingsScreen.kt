@@ -19,6 +19,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -111,6 +113,8 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
 
                 Spacer(Modifier.height(16.dp))
 
+                XiaomiBatteryWarningCard()
+
                 ThemeSection()
 
                 Spacer(Modifier.height(16.dp))
@@ -157,6 +161,46 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
                 )
             },
         )
+    }
+}
+
+/**
+ * Xiaomi (MIUI) ships aggressive battery management — by default it
+ * suspends background apps and may even clear their data on a system
+ * update. Both flags hit Khord hard: the push service dies and the
+ * SQLCipher passphrase vanishes from the Keystore-backed prefs blob,
+ * resulting in "lost identity" reports from MIUI testers. Detect those
+ * devices and surface the workaround inline.
+ */
+@Composable
+private fun XiaomiBatteryWarningCard() {
+    val manufacturer = android.os.Build.MANUFACTURER.lowercase()
+    val isMiui = manufacturer.contains("xiaomi") ||
+        manufacturer.contains("redmi") ||
+        manufacturer.contains("poco")
+    if (!isMiui) return
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Xiaomi device detected",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Xiaomi devices may kill Khord in the background or clear " +
+                    "its data. To prevent this: go to Settings → Apps → " +
+                    "Khord → Battery saver → No restrictions, and enable " +
+                    "Autostart under Settings → Apps → Manage apps → Khord.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+        }
     }
 }
 

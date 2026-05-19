@@ -57,7 +57,8 @@ fun RegistrationScreen(nav: NavController) {
                 if (!recoveryMessaging.needsServerRegistration) {
                     PushServiceController.start(context.applicationContext)
                     nav.navigate(Routes.CONTACTS) {
-                        popUpTo(Routes.SPLASH) { inclusive = true }
+                        popUpTo(nav.graph.startDestinationId) { inclusive = true }
+                        launchSingleTop = true
                     }
                 }
             }
@@ -83,7 +84,8 @@ private fun FreshOnboardingBody(vm: OnboardingViewModel, nav: NavController) {
             AppContainer.onboardingViewModel = null
             PushServiceController.start(context.applicationContext)
             nav.navigate(Routes.CONTACTS) {
-                popUpTo(Routes.WELCOME) { inclusive = true }
+                popUpTo(nav.graph.startDestinationId) { inclusive = true }
+                launchSingleTop = true
             }
         }
     }
@@ -102,6 +104,13 @@ private fun FreshOnboardingBody(vm: OnboardingViewModel, nav: NavController) {
             Text(
                 "Optional. If you skip this, your contacts will see " +
                     "\"Anonymous\" until you set a name later.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "If you've used Khord before, your contacts will need to " +
+                    "add you again with your new identity.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
