@@ -49,7 +49,7 @@ class OnboardingViewModel : ViewModel() {
         data class Display(val words: List<String>) : Status
         data object Registering : Status
         data object Done : Status
-        data class Failed(val message: String) : Status
+        data class Failed(val message: String, val cause: Throwable? = null) : Status
     }
 
     private val _status = MutableStateFlow<Status>(Status.Idle)
@@ -114,7 +114,7 @@ class OnboardingViewModel : ViewModel() {
                 confirmIndices = ConfirmIndices.pick(max = words.size)
                 _status.value = Status.Display(words)
             } catch (e: Throwable) {
-                _status.value = Status.Failed(e.message ?: "generate failed")
+                _status.value = Status.Failed(e.message ?: "generate failed", cause = e)
             }
         }
     }
@@ -162,7 +162,10 @@ class OnboardingViewModel : ViewModel() {
                 currentPhrase = null
                 _status.value = Status.Done
             } catch (e: Throwable) {
-                _status.value = Status.Failed(e.message ?: e::class.simpleName ?: "register failed")
+                _status.value = Status.Failed(
+                    e.message ?: e::class.simpleName ?: "register failed",
+                    cause = e,
+                )
             }
         }
     }

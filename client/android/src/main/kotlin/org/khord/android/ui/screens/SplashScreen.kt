@@ -28,13 +28,19 @@ fun SplashScreen(nav: NavController, vm: SplashViewModel = viewModel()) {
 
     LaunchedEffect(state) {
         when (val s = state) {
-            is SplashState.NeedsOnboarding ->
+            is SplashState.NeedsOnboarding -> {
+                android.util.Log.w("Khord", "Splash: no identity found, routing to Welcome")
                 nav.navigate(Routes.WELCOME) { popUpTo(Routes.SPLASH) { inclusive = true } }
+            }
             is SplashState.Loaded -> {
-                // Returning user with a fully registered identity — fire up
-                // the push service so they receive notifications while the
-                // app is in the background. No-op if already running.
-                if (!s.needsServerRegistration) {
+                if (s.needsServerRegistration) {
+                    android.util.Log.w("Khord", "Splash: needs server registration, routing to Registration")
+                } else {
+                    android.util.Log.w("Khord", "Splash: loaded existing identity")
+                    // Returning user with a fully registered identity —
+                    // fire up the push service so they receive
+                    // notifications while the app is in the background.
+                    // No-op if already running.
                     PushServiceController.start(context.applicationContext)
                 }
                 nav.navigate(

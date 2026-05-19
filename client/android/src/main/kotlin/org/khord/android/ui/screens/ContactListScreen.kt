@@ -48,6 +48,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -57,6 +58,8 @@ import kotlinx.coroutines.isActive
 import org.khord.android.AppContainer
 import org.khord.android.nav.Routes
 import org.khord.android.ui.viewmodel.ContactListViewModel
+import org.khord.android.util.BugReporter
+import org.khord.android.util.CrashReportStore
 import org.khord.android.util.TimestampFormat
 import org.khord.android.util.UpdateInfo
 
@@ -71,6 +74,26 @@ private const val POLL_INTERVAL_MS = 10_000L
 fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showAll by remember { mutableStateOf(false) }
+
+    // Recovered crash report path: if KhordApp's uncaught-exception
+    // handler saved a Report during the previous session, surface
+    // it via BugReportDialog so the user can choose to submit. Cleared
+    // from SharedPreferences on dismiss either way so the dialog
+    // doesn't reappear on every screen mount.
+    val context = LocalContext.current
+    var pendingCrash by remember {
+        mutableStateOf<BugReporter.Report?>(CrashReportStore.load(context))
+    }
+    pendingCrash?.let { report ->
+        BugReportDialog(
+            error = null,
+            preBuiltReport = report,
+            onDismiss = {
+                CrashReportStore.clear(context)
+                pendingCrash = null
+            },
+        )
+    }
 
     // Request POST_NOTIFICATIONS on Android 13+. The push service runs
     // either way — without permission the user just doesn't see banners.

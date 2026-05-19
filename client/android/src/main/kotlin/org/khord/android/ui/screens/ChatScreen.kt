@@ -115,11 +115,33 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     )
                 }
             }
-            state.error?.let {
-                Text("Error: $it",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 16.dp))
+            var showReport by remember { mutableStateOf(false) }
+            state.error?.let { msg ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Error: $msg",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (state.errorCause != null) {
+                        androidx.compose.material3.TextButton(
+                            onClick = { showReport = true },
+                        ) { Text("Report") }
+                    }
+                }
+            }
+            if (showReport && state.errorCause != null) {
+                BugReportDialog(
+                    error = state.errorCause,
+                    onDismiss = {
+                        showReport = false
+                        vm.clearError()
+                    },
+                )
             }
             val unavailable = state.contactStatus ==
                 ChatViewModel.ContactStatus.Unavailable

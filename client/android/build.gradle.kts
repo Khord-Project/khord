@@ -3,6 +3,11 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.kotlinCompose)
+    // Enables `@Serializable` in android module sources (used by
+    // BugReporter to encode the Report DTO). The shared module
+    // applied this plugin already; android picked it up
+    // transitively for runtime but not for compile-time codegen.
+    alias(libs.plugins.kotlinSerialization)
 }
 
 android {

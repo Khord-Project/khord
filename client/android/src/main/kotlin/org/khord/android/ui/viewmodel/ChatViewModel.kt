@@ -54,11 +54,22 @@ class ChatViewModel(
         val messages: List<MessageEntry> = emptyList(),
         val sending: Boolean = false,
         val error: String? = null,
+        /**
+         * The Throwable behind [error], retained so the user can open
+         * a BugReportDialog from the chat with a real stack trace.
+         * Cleared in lockstep with [error] on success or dismiss.
+         */
+        val errorCause: Throwable? = null,
         /** Display name learned from the contact's reply_info, or null if unknown yet. */
         val contactDisplayName: String? = null,
         /** Reachability heuristic for the contact's relay endpoint. */
         val contactStatus: ContactStatus = ContactStatus.Available,
     )
+
+    /** Called by ChatScreen after the user dismisses the bug-report dialog. */
+    fun clearError() {
+        _state.update { it.copy(error = null, errorCause = null) }
+    }
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -118,7 +129,12 @@ class ChatViewModel(
                             it.copy(contactStatus = ContactStatus.Unavailable, error = null)
                         }
                     } else {
-                        _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                        _state.update {
+                            it.copy(
+                                error = e.message ?: e::class.simpleName,
+                                errorCause = e,
+                            )
+                        }
                     }
                 }
                 _state.update { it.copy(sending = false) }

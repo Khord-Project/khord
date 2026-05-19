@@ -137,11 +137,25 @@ private fun FreshOnboardingBody(vm: OnboardingViewModel, nav: NavController) {
         }
         is OnboardingViewModel.Status.Done -> Text("Done")
         is OnboardingViewModel.Status.Failed -> {
+            var showReport by remember { mutableStateOf(false) }
             Text("Registration failed: ${s.message}",
                 color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(16.dp))
             Button(onClick = { vm.register() }, modifier = Modifier.fillMaxWidth()) {
                 Text("Retry")
+            }
+            if (s.cause != null) {
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { showReport = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Report problem") }
+            }
+            if (showReport) {
+                BugReportDialog(
+                    error = s.cause,
+                    onDismiss = { showReport = false },
+                )
             }
         }
     }
