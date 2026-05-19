@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import org.khord.android.ui.theme.KhordThemeChoice
 import org.khord.android.ui.theme.loadThemeChoice
 import org.khord.android.ui.theme.saveThemeChoice
+import org.khord.android.util.UpdateInfo
 import org.khord.shared.Khord
 import org.khord.shared.KhordBootstrap
 import org.khord.shared.protocol.khordHttpClient
@@ -75,6 +76,21 @@ object AppContainer {
         MutableStateFlow(emptyMap())
 
     const val DEAD_CONTACT_THRESHOLD = 3
+
+    /**
+     * Set by [org.khord.android.util.UpdateChecker] once-per-cold-start
+     * if a newer GitHub release exists. ContactListScreen observes this
+     * and shows a subtle banner; tapping "Dismiss" clears it for the
+     * remainder of the session via [dismissAvailableUpdate].
+     *
+     * Reset to null on panic so a fresh process re-checks on next
+     * launch.
+     */
+    val availableUpdate: MutableStateFlow<UpdateInfo?> = MutableStateFlow(null)
+
+    fun dismissAvailableUpdate() {
+        availableUpdate.value = null
+    }
 
     fun recordReceiveFailure(fingerprint: String) {
         contactReceiveFailures.update { current ->
@@ -167,6 +183,7 @@ object AppContainer {
         onboardingViewModel = null
         pushConnected.value = emptySet()
         contactReceiveFailures.value = emptyMap()
+        availableUpdate.value = null
     }
 }
 

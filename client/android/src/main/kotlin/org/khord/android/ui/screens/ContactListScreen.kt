@@ -44,14 +44,21 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.platform.LocalUriHandler
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import org.khord.android.AppContainer
 import org.khord.android.nav.Routes
 import org.khord.android.ui.viewmodel.ContactListViewModel
 import org.khord.android.util.TimestampFormat
+import org.khord.android.util.UpdateInfo
 
 private const val RECENT_CHATS_LIMIT = 5
 private const val POLL_INTERVAL_MS = 10_000L
@@ -124,25 +131,73 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
             }
         },
     ) { innerPadding ->
-        Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
-            if (state.rows.isEmpty()) {
-                EmptyState(error = state.error)
-            } else {
-                RecentChats(
-                    rows = state.rows,
-                    showAll = showAll,
-                    onToggleShowAll = { showAll = !showAll },
-                    onRowClick = { row ->
-                        when (row.kind) {
-                            ContactListViewModel.Row.Kind.Contact ->
-                                nav.navigate(Routes.chat(row.id))
-                            ContactListViewModel.Row.Kind.Group ->
-                                nav.navigate(Routes.groupChat(row.id))
-                        }
-                    },
-                )
+        Column(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
+            // In-app update banner — appears once UpdateChecker (fired
+            // from SplashViewModel after bootstrap) finds a newer
+            // GitHub release. Stays visible until the user taps
+            // "Dismiss" or restarts the app.
+            val update by AppContainer.availableUpdate.collectAsStateWithLifecycle()
+            update?.let { UpdateBanner(it) }
+
+            Box(modifier = Modifier.weight(1f).fillMaxSize()) {
+                if (state.rows.isEmpty()) {
+                    EmptyState(error = state.error)
+                } else {
+                    RecentChats(
+                        rows = state.rows,
+                        showAll = showAll,
+                        onToggleShowAll = { showAll = !showAll },
+                        onRowClick = { row ->
+                            when (row.kind) {
+                                ContactListViewModel.Row.Kind.Contact ->
+                                    nav.navigate(Routes.chat(row.id))
+                                ContactListViewModel.Row.Kind.Group ->
+                                    nav.navigate(Routes.groupChat(row.id))
+                            }
+                        },
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * Subtle "Khord <version> available" banner. Non-blocking — sits at the
+ * top of the contact list, doesn't intercept any other gesture, and
+ * has both an explicit Update action (opens the release page in the
+ * system browser) and a Dismiss that clears the state for the session.
+ */
+@Composable
+private fun UpdateBanner(info: UpdateInfo) {
+    val uriHandler = LocalUriHandler.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(8.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Khord ${info.version} available",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        OutlinedButton(
+            onClick = { AppContainer.dismissAvailableUpdate() },
+        ) { Text("Dismiss") }
+        Spacer(Modifier.width(8.dp))
+        Button(
+            onClick = { uriHandler.openUri(info.htmlUrl) },
+        ) { Text("Update") }
     }
 }
 
