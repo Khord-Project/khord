@@ -45,6 +45,13 @@ internal class InMemoryPersistence : Persistence {
     override suspend fun loadAllOpkSecrets(): Map<Int, ByteArray> =
         opks.mapValues { it.value.copyOf() }
     override suspend fun deleteOneTimePreKey(keyId: Int) { opks.remove(keyId) }
+    override suspend fun deleteAllOneTimePreKeys() {
+        // Zero each secret before removing the map entry — the in-memory
+        // variant doesn't have to keep ByteArray contents in-process any
+        // longer than necessary.
+        for (secret in opks.values) secret.fill(0)
+        opks.clear()
+    }
 
     override suspend fun saveContact(qr: QrPayload, displayName: String) {
         contacts[qr.fingerprint] = ContactInfo(qr, displayName)

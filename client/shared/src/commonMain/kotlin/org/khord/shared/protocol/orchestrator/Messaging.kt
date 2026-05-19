@@ -156,6 +156,26 @@ class Messaging internal constructor(
         }
 
         // Persist identity + SPK + OPKs locally.
+        //
+        // ── Registration-retry safety ────────────────────────────────────
+        // Wipe any previously-persisted OPKs from the local store BEFORE
+        // re-inserting. The first call to register() persists OPKs with
+        // key_ids 1..opkBatchSize. If that call later fails (network
+        // error during uploadBundle, app crash mid-flight, etc.) and the
+        // user retries — either explicitly via the UI or implicitly via
+        // Messaging.load's needsServerRegistration recovery path — the
+        // new OPKs use the SAME key_ids (PreKeys.generateOneTimePreKeys
+        // is deterministic on the range it's given). Without this wipe
+        // the second saveOpkBatch hits a UNIQUE constraint violation on
+        // one_time_pre_key.key_id and the retry crashes the same way as
+        // the first attempt. A fresh sweep on every register call makes
+        // retries idempotent; the Key Server upload below overwrites
+        // whatever the server had too, so the local + remote state
+        // stays consistent.
+        //
+        // SPK uses INSERT OR REPLACE in its .sq query so it's already
+        // retry-safe — no wipe needed for that one.
+        persistence.deleteAllOneTimePreKeys()
         persistence.saveIdentity(
             org.khord.shared.storage.IdentityRecord(
                 identity = identity,

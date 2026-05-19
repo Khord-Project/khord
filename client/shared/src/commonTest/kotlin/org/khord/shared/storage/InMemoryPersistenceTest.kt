@@ -41,6 +41,27 @@ class InMemoryPersistenceTest {
     }
 
     @Test
+    fun deleteAllOneTimePreKeys_wipes_the_store_for_registration_retry() = runTest {
+        // Models the registration-retry path that was crashing with a
+        // UNIQUE constraint violation on DbPersistence: register()
+        // generated OPKs with key_ids 1..N, persisted them, then a later
+        // step failed; on retry, register() generated the same key_ids
+        // and saveOpkBatch hit the dupe. With deleteAllOneTimePreKeys
+        // wired in at the top of register(), this two-saves-with-same-ids
+        // pattern must just work.
+        val p = InMemoryPersistence()
+        p.saveOpkBatch((1..5).associateWith { ByteArray(32) { b -> (it * b).toByte() } })
+        assertEquals(5, p.loadAllOpkSecrets().size)
+
+        p.deleteAllOneTimePreKeys()
+        assertEquals(0, p.loadAllOpkSecrets().size)
+
+        // Re-insert with the SAME key_ids — must succeed.
+        p.saveOpkBatch((1..5).associateWith { ByteArray(32) { b -> (it + b).toByte() } })
+        assertEquals(5, p.loadAllOpkSecrets().size)
+    }
+
+    @Test
     fun contact_save_load() = runTest {
         val p = InMemoryPersistence()
         val qr = QrPayload(

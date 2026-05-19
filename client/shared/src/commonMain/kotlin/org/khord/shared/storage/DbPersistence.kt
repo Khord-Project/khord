@@ -112,6 +112,12 @@ internal class DbPersistence(
         db.preKeysQueries.deleteOpkSecret(keyId.toLong())
     }
 
+    override suspend fun deleteAllOneTimePreKeys() {
+        // The SQL query already existed; this just exposes it through
+        // the Persistence interface for the registration-retry fix.
+        db.preKeysQueries.deleteAllOpkSecrets()
+    }
+
     // ── Contacts ────────────────────────────────────────────────────────────
 
     override suspend fun saveContact(qr: QrPayload, displayName: String) {

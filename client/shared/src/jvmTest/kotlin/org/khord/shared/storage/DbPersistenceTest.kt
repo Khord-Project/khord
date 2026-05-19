@@ -65,6 +65,44 @@ class DbPersistenceTest {
     }
 
     @Test
+    fun deleteAllOneTimePreKeys_unblocks_registration_retry() = runTest {
+        // Reproduction of the production bug: a tester's first
+        // registration crashed mid-flight after OPKs were persisted but
+        // before the Key Server uploadBundle succeeded. On retry,
+        // Messaging.register() generated OPKs with the same key_ids
+        // (PreKeys.generateOneTimePreKeys is deterministic on its
+        // range), and the second saveOpkBatch crashed with
+        // "UNIQUE constraint failed: one_time_pre_key.key_id". Asserts:
+        //   1. A second save with overlapping ids WILL throw — confirms
+        //      the bug is real at the persistence layer.
+        //   2. After deleteAllOneTimePreKeys, the same save succeeds —
+        //      confirms the fix works.
+        val p = openTestDb()
+        try {
+            p.saveOpkBatch((1..5).associateWith { ByteArray(32) { b -> (it * b).toByte() } })
+            assertEquals(5, p.loadAllOpkSecrets().size)
+
+            // Re-insert with overlapping ids must blow up — that's the
+            // production bug we're fixing.
+            var threw = false
+            try {
+                p.saveOpkBatch((1..5).associateWith { ByteArray(32) })
+            } catch (_: Throwable) {
+                threw = true
+            }
+            assertTrue(threw, "expected duplicate-key insert to throw")
+
+            // After wipe, the same insert succeeds.
+            p.deleteAllOneTimePreKeys()
+            assertEquals(0, p.loadAllOpkSecrets().size)
+            p.saveOpkBatch((1..5).associateWith { ByteArray(32) { b -> (it + b).toByte() } })
+            assertEquals(5, p.loadAllOpkSecrets().size)
+        } finally {
+            p.close()
+        }
+    }
+
+    @kotlin.test.Test
     fun spk_and_opk_round_trip() = runTest {
         val p = openTestDb()
         try {

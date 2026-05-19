@@ -45,6 +45,14 @@ internal interface Persistence {
     suspend fun loadAllOpkSecrets(): Map<Int, ByteArray>
     /** Remove an OPK secret after a successful X3DH respond consumed it. */
     suspend fun deleteOneTimePreKey(keyId: Int)
+    /**
+     * Wipe every OPK secret from the store. Called from the start of
+     * [Messaging.register] so that retrying registration after a
+     * partial-failure first attempt doesn't collide with the previous
+     * attempt's already-persisted key_ids (UNIQUE constraint on
+     * one_time_pre_key.key_id). Safe to call on an empty store.
+     */
+    suspend fun deleteAllOneTimePreKeys()
 
     // ── Contacts ────────────────────────────────────────────────────────────
 
