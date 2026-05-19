@@ -27,6 +27,14 @@ env/
 *.pem
 *.key
 
+# Android release-signing material — keystore + the properties file
+# that points at it (with passwords inside). The .example template at
+# client/release-keystore.properties.example is fine to commit because
+# the bare `release-keystore.properties` pattern doesn't match it.
+*.jks
+*.keystore
+release-keystore.properties
+
 # Kotlin / Gradle
 .gradle/
 build/

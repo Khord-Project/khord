@@ -147,16 +147,64 @@ jobs:
       - name: Set up Gradle (with dependency cache)
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build prod debug APK
+      # ── Optional release-signing setup ────────────────────────────────
+      # When secrets.KEYSTORE_BASE64 is present (push to main on the
+      # canonical repo), CI builds the SIGNED prod release APK so the
+      # artifact is install-ready. When it's empty (PRs from forks, or
+      # an org without the secret yet), the step is skipped and we fall
+      # back to the prod DEBUG APK. The debug APK is signed with the
+      # Android debug keystore — usable for testing but not shippable.
+
+      - name: Decode release keystore (if secret present)
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > client/khord-release.jks
+          echo "have_keystore=true" >> "$GITHUB_OUTPUT"
+
+      - name: Write release-keystore.properties (if secret present)
+        if: steps.keystore.outputs.have_keystore == 'true'
+        env:
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD_ENV: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS_ENV: ${{ secrets.KEY_ALIAS }}
+        run: |
+          cat > client/release-keystore.properties <<EOF
+          storeFile=../khord-release.jks
+          storePassword=${STORE_PASSWORD}
+          keyAlias=${KEY_ALIAS_ENV}
+          keyPassword=${KEY_PASSWORD_ENV}
+          EOF
+
+      - name: Build prod release APK (signed)
+        if: steps.keystore.outputs.have_keystore == 'true'
+        working-directory: client
+        run: ./gradlew :android:assembleProdRelease --no-daemon
+
+      - name: Build prod debug APK (fallback when no keystore)
+        if: steps.keystore.outputs.have_keystore != 'true'
         working-directory: client
         run: ./gradlew :android:assembleProdDebug --no-daemon
 
+      - name: Locate the produced APK
+        id: apk
+        run: |
+          if [ -f client/android/build/outputs/apk/prod/release/android-prod-release.apk ]; then
+            echo "path=client/android/build/outputs/apk/prod/release/android-prod-release.apk" >> "$GITHUB_OUTPUT"
+            echo "kind=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=client/android/build/outputs/apk/prod/debug/android-prod-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "kind=debug" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload APK as workflow artifact
-        # Each push gets its own artifact (SHA-suffixed). Retention
-        # defaults to 90 days at the org/repo level; reduce here if
-        # we want to be more aggressive.
+        # Artifact name encodes both the SHA and whether the APK is
+        # release-signed vs debug-fallback so downloaders can tell at
+        # a glance whether it's install-ready.
         uses: actions/upload-artifact@v4
         with:
-          name: android-prod-debug-${{ github.sha }}
-          path: client/android/build/outputs/apk/prod/debug/android-prod-debug.apk
+          name: android-prod-${{ steps.apk.outputs.kind }}-${{ github.sha }}
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error

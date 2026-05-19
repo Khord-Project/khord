@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.kotlinCompose)
@@ -12,7 +14,10 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
-        versionName = "0.1.0"
+        // versionName must match the GitHub release tag (minus the leading
+        // `v`) so UpdateChecker's compare doesn't false-positive. Bump
+        // this when cutting a new release tag.
+        versionName = "0.1.0-alpha"
         // Default server URLs are picked at compile time per flavor (see
         // productFlavors below) and exposed via BuildConfig. The user can
         // still override either with "Use custom servers" at runtime via
@@ -25,8 +30,39 @@ android {
         res.srcDirs("src/main/res")
     }
 
+    // Release signing config — driven by a `release-keystore.properties`
+    // file at the client/ root (see release-keystore.properties.example).
+    // When the file is absent (e.g. a clean clone with no local keystore
+    // and no CI secrets), the config is left null and a release build
+    // falls back to debug-signing — useful for local smoke-tests, but
+    // the produced APK is NOT shippable. CI populates the properties +
+    // keystore file from GitHub Secrets.
+    signingConfigs {
+        create("release") {
+            val props = rootProject.file("release-keystore.properties")
+            if (props.exists()) {
+                // Explicit step-by-step to avoid Kotlin DSL receiver-
+                // scoping confusion: `p["..."]` clashes with Gradle's
+                // ExtensionContainer.get, and `apply { load(...) }`
+                // resolves the inner `load` against SigningConfig
+                // instead of Properties.
+                val p = Properties()
+                props.reader().use { reader -> p.load(reader) }
+                storeFile = file(p.getProperty("storeFile"))
+                storePassword = p.getProperty("storePassword")
+                keyAlias = p.getProperty("keyAlias")
+                keyPassword = p.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
-        release {
+        getByName("release") {
+            // Use the release signing config when its file is present.
+            // If the keystore file referenced by the properties is
+            // missing (storeFile is null), AGP transparently falls back
+            // to the debug signing config for local convenience.
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
         }
     }

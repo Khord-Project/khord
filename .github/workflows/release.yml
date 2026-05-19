@@ -1,11 +1,11 @@
 name: Release
 
 # Triggered by pushing a tag matching v* (e.g. v0.1.0, v0.1.0-alpha,
-# v1.2.3-beta.4). Runs all tests, builds the prod APK, then attaches
-# the APK to a fresh GitHub Release auto-generated from the tag.
-# Tags containing `alpha` or `beta` are marked as prereleases — the
-# `latest` redirect on the Releases page skips prereleases, so stable
-# vN.M.K tags become "latest" automatically.
+# v1.2.3-beta.4). Runs all tests, builds a SIGNED prod release APK,
+# then attaches it to a fresh GitHub Release auto-generated from the
+# tag. Tags containing `alpha` or `beta` are marked as prereleases —
+# the `latest` redirect skips prereleases, so stable vN.M.K tags
+# become "latest" automatically.
 
 on:
   push:
@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   release:
-    name: Test, build, and release
+    name: Test, build, sign, and release
     runs-on: ubuntu-latest
 
     services:
@@ -107,21 +107,49 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://khord_rs:test@localhost:5434/khord_relayserver
         run: pytest tests -q
 
-      # ── Android build ────────────────────────────────────────────────
+      # ── Android signed release build ─────────────────────────────────
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build prod debug APK
+      - name: Decode release keystore
+        # The KEYSTORE_BASE64 secret is the base64-encoded .jks file
+        # produced by `base64 -w0 khord-release.jks`. Decode it to the
+        # location referenced by release-keystore.properties' storeFile
+        # path (../khord-release.jks resolves to client/khord-release.jks
+        # from the :android module's perspective).
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > client/khord-release.jks
+          ls -la client/khord-release.jks
+
+      - name: Write release-keystore.properties
+        # Pass passwords via env vars (NOT directly into the heredoc via
+        # ${{ secrets.* }} expansion) so they don't appear in shell logs
+        # under set -x and aren't subject to shell quoting surprises.
+        env:
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD_ENV: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS_ENV: ${{ secrets.KEY_ALIAS }}
+        run: |
+          cat > client/release-keystore.properties <<EOF
+          storeFile=../khord-release.jks
+          storePassword=${STORE_PASSWORD}
+          keyAlias=${KEY_ALIAS_ENV}
+          keyPassword=${KEY_PASSWORD_ENV}
+          EOF
+
+      - name: Build signed prod release APK
         working-directory: client
-        run: ./gradlew :android:assembleProdDebug --no-daemon
+        run: ./gradlew :android:assembleProdRelease --no-daemon
 
       # ── Release ──────────────────────────────────────────────────────
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: client/android/build/outputs/apk/prod/debug/android-prod-debug.apk
+          files: client/android/build/outputs/apk/prod/release/android-prod-release.apk
           # Tags containing `alpha` or `beta` are prereleases. Stable
           # tags (e.g. v0.1.0) are not, so they become /releases/latest.
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
