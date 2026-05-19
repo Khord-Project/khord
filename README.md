@@ -120,7 +120,7 @@ AGPL ensures that anyone running a modified version of the server must publish t
 
 ## Project Links
 
-- **Website:** https://khord.org (planned)
+- **Website:** https://khord.org
 - **Repository:** https://github.com/Khord-Project/khord
 - **Protocol Specification:** [docs/PROTOCOL.md](docs/PROTOCOL.md)
 - **Architecture Decisions:** [docs/decisions/](docs/decisions/)
