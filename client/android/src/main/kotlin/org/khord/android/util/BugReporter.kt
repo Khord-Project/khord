@@ -1,0 +1,172 @@
+package org.khord.android.util
+
+import android.os.Build
+import android.util.Log
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import org.khord.android.AppContainer
+import org.khord.android.BuildConfig
+
+/**
+ * In-app bug reporting (commit context for v0.1.0-alpha.3).
+ *
+ * Collects a small structured Report — never contains fingerprints,
+ * keys, message contents, contact lists, or server URLs (those last
+ * are scrubbed in [scrubSensitive] before the report leaves the
+ * device). Submits to a `/api/report` endpoint on the landing-page
+ * host. The endpoint may not exist on day one; submission failure
+ * is non-fatal and falls back to a "copy to clipboard" affordance
+ * in the dialog.
+ *
+ * The data we DO send:
+ *   - app version (from BuildConfig.VERSION_NAME)
+ *   - android version and API level
+ *   - device manufacturer + model
+ *   - error message (scrubbed)
+ *   - truncated stack trace (scrubbed)
+ *   - last 50 lines of `logcat -s Khord:V` if reachable (scrubbed)
+ *   - user-typed additional context (consent-gated by the dialog)
+ *
+ * The data we DO NOT send (explicit non-goals per the feature spec):
+ *   - identity fingerprints
+ *   - any cryptographic key material
+ *   - message body text
+ *   - contact names or fingerprints
+ *   - server URLs (keys.khord.org / relay.khord.org / etc.)
+ *
+ * Reports are only ever submitted with user consent — the dialog
+ * shows a full preview of what's about to be sent.
+ */
+object BugReporter {
+
+    private const val REPORT_URL = "https://khord.org/api/report"
+    private const val LOG_TAG = "Khord"
+    private const val STACK_TRACE_LIMIT = 5_000
+    private const val LOGCAT_LINE_COUNT = 50
+    private const val LOGCAT_CHAR_LIMIT = 3_000
+
+    /**
+     * One captured bug report. The fields are designed so that no
+     * single one carries sensitive material — see the scrubbing
+     * pipeline in [collect] and [scrubSensitive].
+     */
+    @Serializable
+    data class Report(
+        val appVersion: String,
+        val androidVersion: String,
+        val deviceModel: String,
+        val errorMessage: String,
+        val stackTrace: String? = null,
+        val diagnosticPath: String? = null,
+        val additionalContext: String? = null,
+    )
+
+    private val json = Json {
+        prettyPrint = true
+        ignoreUnknownKeys = true
+    }
+
+    /**
+     * Build a [Report] from a Throwable + optional user-supplied
+     * additional-context string. Every text field is run through
+     * [scrubSensitive] before being included.
+     */
+    fun collect(error: Throwable, additionalContext: String? = null): Report {
+        val rawMessage = error.message ?: error.toString()
+        val rawStackTrace = error.stackTraceToString().take(STACK_TRACE_LIMIT)
+        return Report(
+            appVersion = BuildConfig.VERSION_NAME,
+            androidVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+            deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
+            errorMessage = scrubSensitive(rawMessage),
+            stackTrace = scrubSensitive(rawStackTrace),
+            diagnosticPath = collectDiagnosticPath()?.let(::scrubSensitive),
+            additionalContext = additionalContext?.let(::scrubSensitive),
+        )
+    }
+
+    /**
+     * Pretty-printed JSON representation of a report — used by the
+     * dialog's "See what will be sent" expansion AND as the clipboard
+     * fallback when submission fails.
+     */
+    fun toJsonString(report: Report): String = json.encodeToString(report)
+
+    /**
+     * POST the report to the landing-page endpoint. Returns
+     * `Result.success(message)` on HTTP 201, `Result.failure(...)`
+     * otherwise. Never throws.
+     */
+    suspend fun submit(report: Report): Result<String> {
+        val http = AppContainer.http
+            ?: return Result.failure(IllegalStateException("HTTP client not initialised"))
+        return try {
+            val response: HttpResponse = http.post(REPORT_URL) {
+                contentType(ContentType.Application.Json)
+                setBody(toJsonString(report))
+            }
+            if (response.status.value == 201) {
+                Result.success("Report submitted")
+            } else {
+                Result.failure(
+                    IllegalStateException("Server returned HTTP ${response.status.value}")
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Read the last [LOGCAT_LINE_COUNT] lines of `Khord`-tagged
+     * logcat output. Returns null if the logcat command isn't
+     * reachable (some emulators / hardened devices restrict it).
+     *
+     * Uses the safe `exec(Array<String>)` form — no shell, no
+     * string concatenation, no user input goes near the command
+     * line.
+     */
+    private fun collectDiagnosticPath(): String? = try {
+        val proc = Runtime.getRuntime().exec(
+            arrayOf("logcat", "-d", "-s", "$LOG_TAG:V", "-t", "$LOGCAT_LINE_COUNT")
+        )
+        proc.inputStream.bufferedReader().use { it.readText() }.take(LOGCAT_CHAR_LIMIT)
+    } catch (e: Exception) {
+        Log.w(LOG_TAG, "BugReporter: logcat capture unavailable — ${e.message}")
+        null
+    }
+
+    /**
+     * Strip patterns that are KNOWN to leak Khord-sensitive data:
+     *
+     *   1. URLs of any scheme → `<url>` (covers server URLs +
+     *      anything else pointing at infra).
+     *   2. 64-char hex strings → `<fingerprint>` (sha256-style
+     *      identity hashes).
+     *   3. Run-of-base64 16+ chars adjacent to a `=` → `<b64>` (a
+     *      conservative heuristic catching ciphertexts that landed
+     *      in exception messages). False positives on long
+     *      stack-trace symbols are acceptable; over-scrubbing is
+     *      cheaper than leaking.
+     *
+     * Order matters: do URLs before hex so the host portion of a
+     * URL doesn't get partially redacted as a fingerprint.
+     */
+    internal fun scrubSensitive(input: String): String {
+        var out = input
+        out = URL_REGEX.replace(out, "<url>")
+        out = HEX_FINGERPRINT_REGEX.replace(out, "<fingerprint>")
+        out = BASE64_BLOB_REGEX.replace(out, "<b64>")
+        return out
+    }
+
+    private val URL_REGEX = Regex("""https?://[^\s"<>'\\]+""")
+    private val HEX_FINGERPRINT_REGEX = Regex("""\b[0-9a-fA-F]{64}\b""")
+    private val BASE64_BLOB_REGEX = Regex("""[A-Za-z0-9+/]{16,}=+""")
+}

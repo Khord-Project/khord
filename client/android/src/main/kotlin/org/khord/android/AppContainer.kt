@@ -155,7 +155,21 @@ object AppContainer {
         bootstrap?.let { return it.messaging != null }
         val httpClient = khordHttpClient(OkHttp)
         val ks = KeystoreBackedKeyStore(applicationContext)
-        val b = Khord.open(httpClient, dbName, ks)
+        // Wrap Khord.open in try/catch so any crash inside Messaging.load
+        // (DB corruption, keystore alias gone, schema mismatch, ratchet
+        // deserialisation failure, etc.) is logged with the "Khord" tag
+        // and surfaces to the caller as "no identity loaded" rather than
+        // a full app crash. The user can panic + re-onboard from there.
+        // commonMain can't use android.util.Log, hence the wrapper lives
+        // here at the nearest android-visible call site.
+        val b = try {
+            Khord.open(httpClient, dbName, ks)
+        } catch (e: Throwable) {
+            android.util.Log.e("Khord", "Messaging.load failed", e)
+            http = httpClient
+            keyStore = ks
+            return false
+        }
 
         http = httpClient
         keyStore = ks

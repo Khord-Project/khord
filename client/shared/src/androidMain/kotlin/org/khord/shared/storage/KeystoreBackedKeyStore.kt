@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import java.security.KeyStore as JavaKeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -39,6 +40,7 @@ class KeystoreBackedKeyStore(private val context: Context) : KeyStore {
         const val PREF_CIPHERTEXT = "ct"
         const val GCM_TAG_LEN_BITS = 128
         const val PASSPHRASE_LEN = 32
+        const val LOG_TAG = "Khord"
     }
 
     private val prefs: SharedPreferences by lazy {
@@ -51,10 +53,12 @@ class KeystoreBackedKeyStore(private val context: Context) : KeyStore {
         if (ivB64 != null && ctB64 != null) {
             // Normal case: decrypt the stored blob with the Keystore key.
             try {
-                return decryptExisting(
+                val pass = decryptExisting(
                     Base64.decode(ivB64, Base64.NO_WRAP),
                     Base64.decode(ctB64, Base64.NO_WRAP),
                 )
+                Log.w(LOG_TAG, "Keystore: decrypted existing passphrase successfully")
+                return pass
             } catch (e: Exception) {
                 // Defense-in-depth for the panic-race: if the Keystore key
                 // is missing or the blob is otherwise undecryptable, wipe
@@ -66,8 +70,11 @@ class KeystoreBackedKeyStore(private val context: Context) : KeyStore {
                 // in both layers means an OS-killed-mid-flush scenario
                 // (low-memory kill, force-stop) doesn't strand the next
                 // launch on a SecretKey cast NullPointerException.
+                Log.w(LOG_TAG, "Keystore: decrypt failed, regenerating — ${e.message}")
                 prefs.edit().clear().commit()
             }
+        } else {
+            Log.w(LOG_TAG, "Keystore: no existing blob, generating fresh")
         }
         return generateAndStore()
     }
