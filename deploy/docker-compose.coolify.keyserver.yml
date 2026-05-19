@@ -30,7 +30,12 @@ services:
       # so relative paths resolve against the repo root.
       context: ./servers/keyserver
     environment:
-      - DATABASE_URL=postgresql://khord_ks:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/khord_keyserver
+      # postgresql+asyncpg:// — the +asyncpg suffix selects SQLAlchemy's
+      # async driver, required by app/database.py's create_async_engine().
+      # Plain postgresql:// would crash at startup with
+      # "InvalidRequestError: The asyncio extension requires an async
+      # driver to be used".
+      - DATABASE_URL=postgresql+asyncpg://khord_ks:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/khord_keyserver
       - KEY_SERVER_TOKEN_SECRET=${KEY_SERVER_TOKEN_SECRET}
       # ↓ Coolify magic. Bare name, no value. List form is required —
       # see the combined compose for the full reasoning (gotcha #2 in

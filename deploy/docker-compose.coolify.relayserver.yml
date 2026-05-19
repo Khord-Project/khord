@@ -23,7 +23,12 @@ services:
       # keyserver compose.
       context: ./servers/relayserver
     environment:
-      - DATABASE_URL=postgresql://khord_rs:${RELAYSERVER_DB_PASSWORD}@relayserver-db:5432/khord_relayserver
+      # postgresql+asyncpg:// — the +asyncpg suffix selects SQLAlchemy's
+      # async driver, required by app/database.py's create_async_engine().
+      # Plain postgresql:// would crash at startup with
+      # "InvalidRequestError: The asyncio extension requires an async
+      # driver to be used".
+      - DATABASE_URL=postgresql+asyncpg://khord_rs:${RELAYSERVER_DB_PASSWORD}@relayserver-db:5432/khord_relayserver
       # The .env file uses RELAY_-prefixed names for clarity; the
       # relay server's pydantic-settings reads the unprefixed field
       # names. Rebind here so no server-side code change is required.
