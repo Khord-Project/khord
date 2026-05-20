@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import org.khord.android.AppContainer
+import org.khord.shared.diagnostic.DiagnosticLog
 import org.khord.shared.protocol.client.PushSignalListener
 
 /**
@@ -54,14 +55,44 @@ class KhordPushService : Service() {
         // API 34+ requires a foreground service type. dataSync is the
         // conventional fit for "ongoing data delivery from a network
         // endpoint" — exactly what this service does.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                KhordNotifications.SERVICE_NOTIFICATION_ID,
-                notif,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        //
+        // The try/catch defends against [android.app.ForegroundServiceStart
+        // NotAllowedException] which Android 12+ throws when the system
+        // tries to bring the service back into the foreground from a
+        // non-foreground-eligible state. This happens most commonly when
+        // the OS reaps our process under memory pressure and the service
+        // is then re-created without an active Activity context. OEMs
+        // like OnePlus / OPPO / Realme / Xiaomi are particularly
+        // aggressive about killing background processes, so this path
+        // gets hit on real devices even when our own start-call sites
+        // are all from visible-Activity contexts.
+        //
+        // The exception class only exists on API 31+. Catching plain
+        // [Exception] keeps us API-portable and also covers any other
+        // permission-related failure (e.g. POST_NOTIFICATIONS denied at
+        // an awkward moment). We log via DiagnosticLog so the next bug
+        // report captures the cause, then [stopSelf] — the service dies
+        // silently instead of crashing the process. The next
+        // user-initiated app launch will start the service fresh from
+        // an Activity context that IS foreground-eligible.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    KhordNotifications.SERVICE_NOTIFICATION_ID,
+                    notif,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            } else {
+                startForeground(KhordNotifications.SERVICE_NOTIFICATION_ID, notif)
+            }
+        } catch (e: Exception) {
+            DiagnosticLog.log(
+                "Khord",
+                "PushService: startForeground denied " +
+                    "(${e::class.simpleName}: ${e.message}); stopping self. " +
+                    "Will retry on next activity-driven start.",
             )
-        } else {
-            startForeground(KhordNotifications.SERVICE_NOTIFICATION_ID, notif)
+            stopSelf()
         }
     }
 
@@ -74,10 +105,21 @@ class KhordPushService : Service() {
             }
             else -> refreshSubscriptions()
         }
-        // STICKY so Android relaunches us if the system reaps us under
-        // memory pressure (the persistent notification stays). The user
-        // can stop us explicitly via panic.
-        return START_STICKY
+        // NOT_STICKY despite this being a long-running listener: on
+        // Android 12+ a system-initiated restart of a foreground
+        // service does NOT carry foreground-start grant, so when
+        // Android reaps us under memory pressure and tries to bring
+        // us back via START_STICKY, the next onCreate hits
+        // ForegroundServiceStartNotAllowedException and crashes
+        // (see issue #9). Returning NOT_STICKY tells Android not to
+        // bother — the service just stays dead until the next
+        // user-initiated Activity start fires
+        // PushServiceController.start(), which is guaranteed to be
+        // foreground-eligible. The user impact is "no push
+        // notifications between memory kills and the next app open",
+        // which is the best we can do without WorkManager-shaped
+        // periodic re-arming.
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
