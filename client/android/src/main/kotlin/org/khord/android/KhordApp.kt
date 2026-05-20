@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import org.khord.android.util.BugReporter
 import org.khord.android.util.CrashReportStore
+import org.khord.shared.diagnostic.DiagnosticLog
 import org.khord.shared.storage.PlatformContextProvider
 
 /**
@@ -56,7 +57,15 @@ class KhordApp : Application() {
             try {
                 val report = BugReporter.collect(throwable)
                 CrashReportStore.save(this, report)
+                // Keep the Log.e call: it routes the FULL stack trace
+                // to adb logcat — DiagnosticLog only captures the
+                // message string and the ring buffer is already covered
+                // by the BugReporter.collect call above.
                 Log.e("Khord", "Uncaught exception captured for next-launch dialog", throwable)
+                DiagnosticLog.log(
+                    "Khord",
+                    "Uncaught exception captured for next-launch dialog: ${throwable.message}",
+                )
             } catch (_: Throwable) {
                 // Nothing more we can do here.
             }

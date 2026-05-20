@@ -1,7 +1,6 @@
 package org.khord.android.util
 
 import android.os.Build
-import android.util.Log
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -12,6 +11,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.khord.android.AppContainer
 import org.khord.android.BuildConfig
+import org.khord.shared.diagnostic.DiagnosticLog
 
 /**
  * In-app bug reporting (commit context for v0.1.0-alpha.3).
@@ -30,7 +30,9 @@ import org.khord.android.BuildConfig
  *   - device manufacturer + model
  *   - error message (scrubbed)
  *   - truncated stack trace (scrubbed)
- *   - last 50 lines of `logcat -s Khord:V` if reachable (scrubbed)
+ *   - last [DiagnosticLog.MAX_ENTRIES] in-process diagnostic lines
+ *     (scrubbed). Replaces the old shell-out to `logcat` which Xiaomi /
+ *     MIUI builds block for non-system UIDs — see field reports #4–#6.
  *   - user-typed additional context (consent-gated by the dialog)
  *
  * The data we DO NOT send (explicit non-goals per the feature spec):
@@ -46,10 +48,8 @@ import org.khord.android.BuildConfig
 object BugReporter {
 
     private const val REPORT_URL = "https://khord.org/api/report"
-    private const val LOG_TAG = "Khord"
     private const val STACK_TRACE_LIMIT = 5_000
-    private const val LOGCAT_LINE_COUNT = 50
-    private const val LOGCAT_CHAR_LIMIT = 3_000
+    private const val DIAGNOSTIC_CHAR_LIMIT = 3_000
 
     /**
      * One captured bug report. The fields are designed so that no
@@ -124,22 +124,23 @@ object BugReporter {
     }
 
     /**
-     * Read the last [LOGCAT_LINE_COUNT] lines of `Khord`-tagged
-     * logcat output. Returns null if the logcat command isn't
-     * reachable (some emulators / hardened devices restrict it).
+     * Snapshot of the in-process [DiagnosticLog] ring buffer, capped
+     * at [DIAGNOSTIC_CHAR_LIMIT] so the bug-report JSON stays bounded
+     * even on a chatty session. Returns null when the ring is empty
+     * (e.g. a crash that fired before any DiagnosticLog.log call).
      *
-     * Uses the safe `exec(Array<String>)` form — no shell, no
-     * string concatenation, no user input goes near the command
-     * line.
+     * Replaces the previous shell-out to `logcat`, which Xiaomi / MIUI
+     * builds reliably blocked for non-system UIDs — every field report
+     * from the M2101K6G testers (issues #4–#6) showed "not available"
+     * for this field.
      */
-    private fun collectDiagnosticPath(): String? = try {
-        val proc = Runtime.getRuntime().exec(
-            arrayOf("logcat", "-d", "-s", "$LOG_TAG:V", "-t", "$LOGCAT_LINE_COUNT")
-        )
-        proc.inputStream.bufferedReader().use { it.readText() }.take(LOGCAT_CHAR_LIMIT)
-    } catch (e: Exception) {
-        Log.w(LOG_TAG, "BugReporter: logcat capture unavailable — ${e.message}")
-        null
+    private fun collectDiagnosticPath(): String? {
+        val dump = DiagnosticLog.dump()
+        if (dump.isEmpty()) return null
+        // Keep the most-recent slice if the buffer overflows the cap —
+        // tail is more useful than head when triaging a crash.
+        return if (dump.length <= DIAGNOSTIC_CHAR_LIMIT) dump
+        else dump.takeLast(DIAGNOSTIC_CHAR_LIMIT)
     }
 
     /**

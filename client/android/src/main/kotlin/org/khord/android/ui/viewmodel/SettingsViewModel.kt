@@ -2,7 +2,6 @@ package org.khord.android.ui.viewmodel
 
 import android.content.Context
 import android.os.Process
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.khord.android.AppContainer
 import org.khord.android.push.PushServiceController
+import org.khord.shared.diagnostic.DiagnosticLog
 import org.khord.shared.storage.PlatformContextProvider
 
 class SettingsViewModel : ViewModel() {
@@ -91,7 +91,10 @@ class SettingsViewModel : ViewModel() {
                 // Non-fatal — we kill the process below regardless. Logged
                 // so a future "panic left the device half-wiped" report
                 // has something to chase in logcat.
-                Log.w("Khord", "panic cleanup threw; killing process anyway", e)
+                DiagnosticLog.log(
+                    "Khord",
+                    "panic cleanup threw; killing process anyway: ${e.message}",
+                )
             } finally {
                 Process.killProcess(Process.myPid())
             }

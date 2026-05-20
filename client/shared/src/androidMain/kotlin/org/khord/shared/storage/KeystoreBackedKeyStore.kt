@@ -5,13 +5,13 @@ import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import android.util.Log
 import java.security.KeyStore as JavaKeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import org.khord.shared.crypto.Random
+import org.khord.shared.diagnostic.DiagnosticLog
 
 /**
  * Android Keystore-backed [KeyStore].
@@ -43,6 +43,26 @@ class KeystoreBackedKeyStore(private val context: Context) : KeyStore {
         const val LOG_TAG = "Khord"
     }
 
+    /**
+     * One-shot signal: was the previous call to [getOrCreateDatabasePassphrase]
+     * forced to regenerate the passphrase because the persisted blob
+     * couldn't be decrypted? Set only when iv+ct were both present (so
+     * we're sure it's a real key-invalidation, not a first launch).
+     *
+     * The Android factory at [org.khord.shared.storage.openDbPersistence]
+     * reads this immediately after the call to decide whether the
+     * existing `khord.db` file is now an orphan that needs deleting —
+     * SQLCipher won't be able to decrypt it with the freshly-minted
+     * passphrase, so leaving it on disk would loop forever between
+     * bootstrap and the state-loss dialog.
+     *
+     * Resets to false the moment a fresh call to
+     * [getOrCreateDatabasePassphrase] returns successfully without
+     * needing regeneration.
+     */
+    var lastLoadRegeneratedKey: Boolean = false
+        private set
+
     private val prefs: SharedPreferences by lazy {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
@@ -57,24 +77,39 @@ class KeystoreBackedKeyStore(private val context: Context) : KeyStore {
                     Base64.decode(ivB64, Base64.NO_WRAP),
                     Base64.decode(ctB64, Base64.NO_WRAP),
                 )
-                Log.w(LOG_TAG, "Keystore: decrypted existing passphrase successfully")
+                lastLoadRegeneratedKey = false
+                DiagnosticLog.log(LOG_TAG, "Keystore: decrypted existing passphrase successfully")
                 return pass
             } catch (e: Exception) {
-                // Defense-in-depth for the panic-race: if the Keystore key
-                // is missing or the blob is otherwise undecryptable, wipe
-                // the orphaned prefs entry and fall through to generate a
-                // fresh passphrase. The most common trigger is panic +
-                // Process.killProcess firing between the synchronous
-                // Keystore alias delete and the SharedPreferences write.
-                // [clear] now uses commit() to avoid that, but defending
-                // in both layers means an OS-killed-mid-flush scenario
-                // (low-memory kill, force-stop) doesn't strand the next
-                // launch on a SecretKey cast NullPointerException.
-                Log.w(LOG_TAG, "Keystore: decrypt failed, regenerating — ${e.message}")
+                // Two distinct triggers funnel through here:
+                //   1. Panic + Process.killProcess firing between the
+                //      synchronous Keystore alias delete and the prefs
+                //      write — the blob points at a key that no longer
+                //      exists. [clear] uses commit() to avoid this, but
+                //      an OS-killed-mid-flush (low-memory kill,
+                //      force-stop) can still strand the next launch.
+                //   2. Xiaomi / MIUI Keystore invalidation. The Keystore
+                //      key just disappears (lock-screen change, system
+                //      update, "clear app data" on a parent app
+                //      template). Field reports #4–#6 are this path:
+                //      iv+ct are both still in prefs, but no key.
+                //
+                // Either way we wipe the orphaned prefs entry and fall
+                // through to a fresh passphrase. The
+                // [lastLoadRegeneratedKey] flag tells the Android
+                // factory to also delete the orphaned `khord.db` so
+                // SQLCipher doesn't keep failing on a file no key can
+                // open.
+                DiagnosticLog.log(
+                    LOG_TAG,
+                    "Keystore: decrypt failed, regenerating — ${e.message}",
+                )
                 prefs.edit().clear().commit()
+                lastLoadRegeneratedKey = true
             }
         } else {
-            Log.w(LOG_TAG, "Keystore: no existing blob, generating fresh")
+            DiagnosticLog.log(LOG_TAG, "Keystore: no existing blob, generating fresh")
+            lastLoadRegeneratedKey = false
         }
         return generateAndStore()
     }

@@ -1,9 +1,9 @@
 package org.khord.android.util
 
 import android.content.Context
-import android.util.Log
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.khord.shared.diagnostic.DiagnosticLog
 
 /**
  * SharedPreferences-backed holding area for a single pending crash
@@ -44,7 +44,7 @@ object CrashReportStore {
                 .putString(KEY_REPORT_JSON, payload)
                 .commit()
         } catch (e: Throwable) {
-            Log.e("Khord", "CrashReportStore.save failed", e)
+            DiagnosticLog.log("Khord", "CrashReportStore.save failed: ${e.message}")
         }
     }
 
@@ -53,7 +53,10 @@ object CrashReportStore {
         return try {
             json.decodeFromString<BugReporter.Report>(raw)
         } catch (e: Throwable) {
-            Log.w("Khord", "CrashReportStore.load: invalid stored payload, clearing", e)
+            DiagnosticLog.log(
+                "Khord",
+                "CrashReportStore.load: invalid stored payload, clearing: ${e.message}",
+            )
             clear(context)
             null
         }
