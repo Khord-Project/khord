@@ -168,6 +168,40 @@ object AppContainer {
      */
     suspend fun bootstrap(applicationContext: Context, dbName: String = ServerUrls.DB_NAME): Boolean {
         bootstrap?.let { return it.messaging != null }
+
+        // Diagnostic snapshot of the databases directory BEFORE any
+        // file or keystore work runs. Repeated Xiaomi / OnePlus reports
+        // (issues #4 #5 #6 #11 #13 #14) show state_loss with no clear
+        // cause; recording the on-disk shape lets us tell apart:
+        //   - the databases dir itself is missing (Android wiped a
+        //     whole sandbox subtree)
+        //   - dir exists, file is gone (something deleted just the
+        //     main .db)
+        //   - dir exists with WAL/SHM/journal but no main .db (mid-
+        //     write corruption)
+        //   - the path is inconsistent between launches (MIUI dual-
+        //     app / second profile cloning)
+        // The lines land in the DiagnosticLog ring, so they're picked
+        // up by every subsequent bug-report submission.
+        val dbDir = applicationContext.getDatabasePath(dbName).parentFile
+        org.khord.shared.diagnostic.DiagnosticLog.log(
+            "Khord",
+            "Bootstrap: databases dir=${dbDir?.absolutePath} " +
+                "exists=${dbDir?.exists()}",
+        )
+        if (dbDir?.exists() == true) {
+            org.khord.shared.diagnostic.DiagnosticLog.log(
+                "Khord",
+                "Bootstrap: databases dir contents=" +
+                    "${dbDir.listFiles()?.map { it.name }}",
+            )
+        }
+        org.khord.shared.diagnostic.DiagnosticLog.log(
+            "Khord",
+            "Bootstrap: full db path=" +
+                applicationContext.getDatabasePath(dbName).absolutePath,
+        )
+
         val httpClient = khordHttpClient(OkHttp)
         val ks = KeystoreBackedKeyStore(applicationContext)
         // Wrap Khord.open in try/catch so any crash inside Messaging.load

@@ -1,5 +1,6 @@
 package org.khord.android.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +44,49 @@ fun RegistrationScreen(nav: NavController) {
         vm == null && it.needsServerRegistration
     }
 
+    // Diagnostic: log entry to this screen + which sub-path we're on
+    // (fresh / mid-crash-recovery / state-lost). Runs once per
+    // composition rooted at RegistrationScreen so we capture every
+    // arrival including back-navigations into here.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        val branch = when {
+            vm != null -> "fresh"
+            recoveryMessaging != null -> "mid-registration-recovery"
+            else -> "state-lost"
+        }
+        org.khord.shared.diagnostic.DiagnosticLog.log(
+            "Khord",
+            "RegistrationScreen: enter branch=$branch " +
+                "(messagingNull=${AppContainer.messaging == null}, " +
+                "needsServerReg=" +
+                "${AppContainer.messaging?.needsServerRegistration})",
+        )
+    }
+
+    // Diagnostic: trap system back presses so we can correlate
+    // "user backed out mid-registration" against subsequent state-loss
+    // reports. We DON'T intercept the navigation — the back press
+    // still proceeds via popBackStack — we just record the persisted
+    // registration state before it does. Without this, "user 1"-style
+    // reports (registered-then-state-lost-on-reopen) can't tell us
+    // whether registration actually completed before the user
+    // navigated away. We snapshot from AppContainer.messaging because
+    // its needsServerRegistration field is the persistence-backed
+    // truth (the VM status is in-memory and goes away on process
+    // death).
+    BackHandler(enabled = true) {
+        org.khord.shared.diagnostic.DiagnosticLog.log(
+            "Khord",
+            "RegistrationScreen: system back pressed " +
+                "(messagingNull=${AppContainer.messaging == null}, " +
+                "needsServerReg=" +
+                "${AppContainer.messaging?.needsServerRegistration}, " +
+                "onboardingVmNull=" +
+                "${AppContainer.onboardingViewModel == null})",
+        )
+        nav.popBackStack()
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.Center,
@@ -81,6 +125,15 @@ private fun FreshOnboardingBody(vm: OnboardingViewModel, nav: NavController) {
 
     LaunchedEffect(status) {
         if (status is OnboardingViewModel.Status.Done) {
+            org.khord.shared.diagnostic.DiagnosticLog.log(
+                "Khord",
+                "RegistrationScreen: Status.Done observed — clearing " +
+                    "onboardingViewModel, starting push service, " +
+                    "navigating to ContactList " +
+                    "(messagingNull=${AppContainer.messaging == null}, " +
+                    "needsServerReg=" +
+                    "${AppContainer.messaging?.needsServerRegistration})",
+            )
             AppContainer.onboardingViewModel = null
             PushServiceController.start(context.applicationContext)
             nav.navigate(Routes.CONTACTS) {
