@@ -7,6 +7,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.khord.android.BuildConfig
@@ -24,7 +25,9 @@ data class UpdateInfo(
 /**
  * Lightweight, fire-once-per-cold-start GitHub Releases polling.
  *
- *   - One `GET` to /releases/latest. No retries on failure.
+ *   - One `GET` to /releases (plural — includes prereleases). The API
+ *     returns releases newest-first; we pick element [0] and ignore
+ *     drafts. No retries on failure.
  *   - 5 s timeout — if the network is slow we just skip the check this
  *     session.
  *   - Compares the tag (minus the leading `v`) to [BuildConfig.VERSION_NAME].
@@ -33,13 +36,10 @@ data class UpdateInfo(
  *     The UI banner is opt-in attention; an inability to check should
  *     never block, log a complaint, or surface anything to the user.
  *
- * Note: `/releases/latest` excludes prereleases by default. The
- * current Khord PoC ships as v*-alpha prereleases, so this endpoint
- * returns 404 (no non-prerelease exists yet) and we get null. To
- * surface alpha-to-alpha updates we'd swap to `/releases` and pick
- * the first by date. Doing that pivot when v0.1.0 (non-prerelease)
- * ships — for now this is a stub that activates on first stable
- * release.
+ * We use `/releases` (not `/releases/latest`) on purpose: `/latest`
+ * excludes prereleases, and Khord's PoC channel ships exclusively as
+ * `v*-alpha*` prereleases. Hitting `/latest` returned 404 and the
+ * banner never fired between alphas.
  *
  * Privacy note: this is a single anonymous GET to api.github.com.
  * No telemetry, no install id, no auth header — the only signal
@@ -48,8 +48,8 @@ data class UpdateInfo(
  */
 object UpdateChecker {
 
-    private const val RELEASES_LATEST_URL =
-        "https://api.github.com/repos/Khord-Project/khord/releases/latest"
+    private const val RELEASES_URL =
+        "https://api.github.com/repos/Khord-Project/khord/releases?per_page=10"
 
     private const val TIMEOUT_MS = 5_000L
 
@@ -67,11 +67,19 @@ object UpdateChecker {
      */
     suspend fun checkOnce(http: HttpClient): UpdateInfo? = runCatching {
         withTimeoutOrNull(TIMEOUT_MS) {
-            val response: HttpResponse = http.get(RELEASES_LATEST_URL)
+            val response: HttpResponse = http.get(RELEASES_URL)
             if (response.status != HttpStatusCode.OK) return@withTimeoutOrNull null
-            val obj = json.parseToJsonElement(response.bodyAsText()).jsonObject
-            val tagName = obj["tag_name"]?.jsonPrimitive?.content ?: return@withTimeoutOrNull null
-            val htmlUrl = obj["html_url"]?.jsonPrimitive?.content ?: return@withTimeoutOrNull null
+            val arr = json.parseToJsonElement(response.bodyAsText()).jsonArray
+            // GitHub returns newest-first, but drafts can sneak in for
+            // repo collaborators. Pick the first non-draft.
+            val release = arr.asSequence()
+                .map { it.jsonObject }
+                .firstOrNull { it["draft"]?.jsonPrimitive?.content != "true" }
+                ?: return@withTimeoutOrNull null
+            val tagName = release["tag_name"]?.jsonPrimitive?.content
+                ?: return@withTimeoutOrNull null
+            val htmlUrl = release["html_url"]?.jsonPrimitive?.content
+                ?: return@withTimeoutOrNull null
             val latestVersion = tagName.removePrefix("v")
             if (isNewer(remote = latestVersion, local = BuildConfig.VERSION_NAME)) {
                 UpdateInfo(version = latestVersion, htmlUrl = htmlUrl)
@@ -83,20 +91,21 @@ object UpdateChecker {
      * Compare two semver-ish version strings. Returns true iff [remote]
      * is strictly newer than [local].
      *
-     * Rules (good enough for Khord's `MAJOR.MINOR.PATCH[-PRE]` tagging
-     * convention — full semver build-metadata is intentionally out of
-     * scope for this PoC checker):
+     * Follows the subset of semver 2.0 we care about for Khord's
+     * `MAJOR.MINOR.PATCH[-PRE]` tagging convention:
      *   1. Split numeric prefix and optional `-prerelease` suffix.
      *   2. Compare numeric components left-to-right, padding with 0.
      *   3. If numeric parts equal: a non-empty prerelease loses to an
-     *      empty one ("1.0.0-alpha" < "1.0.0"); two non-empties compare
-     *      lexicographically ("1.0.0-alpha" < "1.0.0-beta").
+     *      empty one ("1.0.0-alpha" < "1.0.0").
+     *   4. Two non-empty prereleases are compared dot-separated
+     *      segment-by-segment. Numeric segments compare numerically
+     *      (so `alpha.10` > `alpha.2`); alphanumeric segments compare
+     *      lexicographically; numeric < alphanumeric (per semver §11).
+     *      A version with more prerelease segments wins if all
+     *      preceding segments are equal (`alpha` < `alpha.1`).
      *
-     * Known limitation: `1.0.0-alpha.10` < `1.0.0-alpha.2` lexically
-     * (wrong). The Khord tagging scheme uses single-word prereleases
-     * (`alpha`, `beta`) so this doesn't matter in practice. If we ever
-     * adopt numbered prereleases this comparator gets a real semver
-     * library.
+     * Build-metadata (`+build`) is intentionally out of scope — Khord
+     * tags don't use it.
      */
     internal fun isNewer(remote: String, local: String): Boolean {
         if (remote == local) return false
@@ -112,7 +121,7 @@ object UpdateChecker {
         return when {
             remotePre.isEmpty() && localPre.isNotEmpty() -> true   // 1.0.0 > 1.0.0-alpha
             remotePre.isNotEmpty() && localPre.isEmpty() -> false  // 1.0.0-alpha < 1.0.0
-            else -> remotePre > localPre                            // lex order
+            else -> comparePrerelease(remotePre, localPre) > 0
         }
     }
 
@@ -122,5 +131,35 @@ object UpdateChecker {
         val prePart = if (dash >= 0) v.substring(dash + 1) else ""
         val nums = numericPart.split('.').mapNotNull { it.toIntOrNull() }
         return nums to prePart
+    }
+
+    /**
+     * Compare two non-empty prerelease strings per semver §11. Returns
+     * a positive int if [a] > [b], negative if [a] < [b], zero if
+     * equal.
+     */
+    private fun comparePrerelease(a: String, b: String): Int {
+        val aSegs = a.split('.')
+        val bSegs = b.split('.')
+        val n = minOf(aSegs.size, bSegs.size)
+        for (i in 0 until n) {
+            val cmp = compareSegment(aSegs[i], bSegs[i])
+            if (cmp != 0) return cmp
+        }
+        // All shared segments equal — the longer prerelease wins
+        // (`alpha` < `alpha.1`).
+        return aSegs.size - bSegs.size
+    }
+
+    private fun compareSegment(a: String, b: String): Int {
+        val aNum = a.toIntOrNull()
+        val bNum = b.toIntOrNull()
+        return when {
+            aNum != null && bNum != null -> aNum.compareTo(bNum)
+            // Numeric segments have lower precedence than alphanumeric.
+            aNum != null -> -1
+            bNum != null -> 1
+            else -> a.compareTo(b)
+        }
     }
 }
