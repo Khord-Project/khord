@@ -167,7 +167,31 @@ object AppContainer {
      * a first launch (caller should run onboarding).
      */
     suspend fun bootstrap(applicationContext: Context, dbName: String = ServerUrls.DB_NAME): Boolean {
-        bootstrap?.let { return it.messaging != null }
+        // Idempotent guard — check the LIVE [messaging] field, not
+        // [bootstrap.messaging]. The latter is frozen at the value
+        // [Khord.open] returned the first time bootstrap ran, so on a
+        // first-launch (no identity yet) it stays null for the entire
+        // process even after [OnboardingViewModel.register] writes a
+        // freshly-registered Messaging into [messaging].
+        //
+        // The old check (`bootstrap?.let { return it.messaging != null }`)
+        // caused every re-entry into SplashViewModel after a successful
+        // registration to spuriously report "no identity loaded",
+        // routing the user back to Welcome — or worse, into the
+        // state-loss dialog (because dbFileExists/prefsHaveBlob were
+        // both true post-registration). Reproduced by Xiaomi + Motorola
+        // testers pressing back from ContactList; the push service kept
+        // working (it reads [messaging] directly) while the UI claimed
+        // state loss.
+        bootstrap?.let {
+            val haveIdentity = messaging != null
+            org.khord.shared.diagnostic.DiagnosticLog.log(
+                "Khord",
+                "Bootstrap: idempotent re-entry, " +
+                    "haveLiveMessaging=$haveIdentity",
+            )
+            return haveIdentity
+        }
 
         // Diagnostic snapshot of the databases directory BEFORE any
         // file or keystore work runs. Repeated Xiaomi / OnePlus reports

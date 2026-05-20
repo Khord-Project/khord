@@ -1,5 +1,6 @@
 package org.khord.android.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -78,13 +79,36 @@ private const val POLL_INTERVAL_MS = 10_000L
 fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showAll by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    // ContactList is the terminal post-onboarding destination — all
+    // navigation paths into it use popUpTo(graph.startDestinationId,
+    // inclusive=true), so the back stack should be just [CONTACTS]
+    // and a back press should exit the app. In practice some Compose
+    // Navigation versions / OEM back-stack implementations (Xiaomi,
+    // Motorola) revive a stale destination instead of finishing the
+    // Activity — which surfaces as "Registration state lost." or a
+    // bogus state-loss dialog even though the push service is happily
+    // serving the live identity. Intercept here and call finish()
+    // explicitly so the back press is unambiguous.
+    //
+    // Scoped to the CONTACTS composable: leaving the screen
+    // (Settings, Chat, AddContact, etc.) unregisters the handler and
+    // the standard popBackStack behaviour resumes for the destinations
+    // pushed on top.
+    BackHandler(enabled = true) {
+        org.khord.shared.diagnostic.DiagnosticLog.log(
+            "Khord",
+            "ContactList: back pressed, finishing Activity",
+        )
+        (context as? android.app.Activity)?.finish()
+    }
 
     // Recovered crash report path: if KhordApp's uncaught-exception
     // handler saved a Report during the previous session, surface
     // it via BugReportDialog so the user can choose to submit. Cleared
     // from SharedPreferences on dismiss either way so the dialog
     // doesn't reappear on every screen mount.
-    val context = LocalContext.current
     var pendingCrash by remember {
         mutableStateOf<BugReporter.Report?>(CrashReportStore.load(context))
     }
