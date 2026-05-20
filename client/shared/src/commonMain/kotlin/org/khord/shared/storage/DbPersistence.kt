@@ -155,6 +155,22 @@ internal class DbPersistence(
         db.contactQueries.updateContactDisplayName(displayName, fingerprint)
     }
 
+    override suspend fun deleteContact(fingerprint: String) {
+        // Explicit transactional delete of messages + session + the
+        // contact row. The schema declares ON DELETE CASCADE on the
+        // session and message FKs, but the Android SQLCipher driver
+        // doesn't enable `PRAGMA foreign_keys=ON` (only the JVM
+        // driver does), so CASCADE silently no-ops there. Doing the
+        // deletes explicitly in a transaction matches the
+        // [deleteGroup] convention and makes the contract independent
+        // of FK pragma state.
+        db.transaction {
+            db.messageQueries.deleteMessagesForContact(fingerprint)
+            db.sessionQueries.deleteSession(fingerprint)
+            db.contactQueries.deleteContact(fingerprint)
+        }
+    }
+
     private fun rowToQr(
         fingerprint: String, ed25519: ByteArray, ks: String, rs: String, mailbox: String,
     ): QrPayload = QrPayload(

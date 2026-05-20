@@ -62,6 +62,16 @@ internal class InMemoryPersistence : Persistence {
         contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(displayName = displayName) }
     }
 
+    override suspend fun deleteContact(fingerprint: String) {
+        // Mirror the SQLDelight CASCADE behaviour by removing every
+        // sibling map entry keyed off this fingerprint. Messages live
+        // in a list-of-pairs keyed by fingerprint; everything else is
+        // a direct map lookup.
+        contacts.remove(fingerprint)
+        sessions.remove(fingerprint)
+        messages.removeAll { it.first == fingerprint }
+    }
+
     override suspend fun savePendingMailbox(mailboxId: String, bearerToken: String) {
         pendingMailboxes[mailboxId] = bearerToken
     }

@@ -165,6 +165,56 @@ class DbPersistenceTest {
     }
 
     @Test
+    fun deleteContact_cascades_to_session_and_messages_via_explicit_transaction() = runTest {
+        val p = openTestDb()
+        try {
+            val aliceFp = "a".repeat(64)
+            val bobFp = "b".repeat(64)
+            p.saveContact(QrPayload(
+                identityKey = "AAAA", fingerprint = aliceFp,
+                keyServer = "https://ks", relayServer = "https://rs",
+                relayMailbox = "alice-mailbox-id-22-aaaa",
+            ), "Alice")
+            p.saveContact(QrPayload(
+                identityKey = "BBBB", fingerprint = bobFp,
+                keyServer = "https://ks", relayServer = "https://rs",
+                relayMailbox = "bob-mailbox-id-22-bbbbbb",
+            ), "Bob")
+            // Alice gets a session row + messages, Bob just a contact row.
+            val state = RatchetState(
+                DHs = X25519KeyPair(ByteArray(32) { 1 }, ByteArray(32) { 2 }),
+                DHr = ByteArray(32) { 3 },
+                RK = ByteArray(32) { 4 },
+                CKs = ByteArray(32) { 5 },
+                CKr = null,
+                Ns = 0, Nr = 0, PN = 0,
+            )
+            p.saveSession(SessionRecord(
+                contactFingerprint = aliceFp,
+                inboundMailbox = "in-alice", inboundBearerToken = "tok",
+                outboundMailbox = "out-alice", outboundRelayServer = "https://rs",
+                associatedData = ByteArray(64),
+                ratchetState = state, lastFetchedSequence = 0,
+                updatedAt = "2026-05-20T00:00:00Z",
+            ))
+            for (i in 1..3) {
+                p.saveMessage(aliceFp, MessageDirection.SENT, "m$i", "2026-05-20T00:0$i:00Z")
+            }
+
+            p.deleteContact(aliceFp)
+
+            assertNull(p.loadContact(aliceFp))
+            assertNull(p.loadSession(aliceFp))
+            assertEquals(0, p.loadMessages(aliceFp).size)
+            // Bob's row untouched.
+            assertEquals("Bob", p.loadContact(bobFp)!!.displayName)
+            assertEquals(1, p.loadAllContacts().size)
+        } finally {
+            p.close()
+        }
+    }
+
+    @Test
     fun session_round_trip_with_ratchet_state() = runTest {
         val p = openTestDb()
         try {
