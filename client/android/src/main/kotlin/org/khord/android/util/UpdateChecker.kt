@@ -25,16 +25,25 @@ data class UpdateInfo(
 /**
  * Lightweight, fire-once-per-cold-start GitHub Releases polling.
  *
- *   - One `GET` to /releases (plural — includes prereleases). The API
- *     returns releases newest-first; we pick element [0] and ignore
- *     drafts. No retries on failure.
+ *   - One `GET` to /releases (plural — includes prereleases). No retries.
  *   - 5 s timeout — if the network is slow we just skip the check this
  *     session.
- *   - Compares the tag (minus the leading `v`) to [BuildConfig.VERSION_NAME].
- *     Returns [UpdateInfo] iff the remote tag is strictly newer.
+ *   - Parses every non-draft release, picks the maximum tag via
+ *     [isNewer], and returns [UpdateInfo] iff that max is strictly
+ *     newer than [BuildConfig.VERSION_NAME].
  *   - Any HTTP error, parse error, or timeout returns null — silently.
  *     The UI banner is opt-in attention; an inability to check should
  *     never block, log a complaint, or surface anything to the user.
+ *
+ * Why not just read element `[0]`? Empirically GitHub's
+ * `/releases` endpoint does NOT return strict newest-first. With ten
+ * Khord releases live, `alpha.10` lands at position 7 in the response
+ * (between `alpha.4` and `alpha.3`) — the API appears to sort by some
+ * hybrid that isn't `published_at` or pure lex. Trusting `[0]` had us
+ * surfacing `alpha.9` to alpha.10 users (no banner) and to alpha.8
+ * users (correctly showed "alpha.9 available", which was the original
+ * positive observation that masked the bug). Iterating with [isNewer]
+ * removes the ordering assumption entirely.
  *
  * We use `/releases` (not `/releases/latest`) on purpose: `/latest`
  * excludes prereleases, and Khord's PoC channel ships exclusively as
@@ -70,22 +79,42 @@ object UpdateChecker {
             val response: HttpResponse = http.get(RELEASES_URL)
             if (response.status != HttpStatusCode.OK) return@withTimeoutOrNull null
             val arr = json.parseToJsonElement(response.bodyAsText()).jsonArray
-            // GitHub returns newest-first, but drafts can sneak in for
-            // repo collaborators. Pick the first non-draft.
-            val release = arr.asSequence()
+            val candidates = arr.asSequence()
                 .map { it.jsonObject }
-                .firstOrNull { it["draft"]?.jsonPrimitive?.content != "true" }
-                ?: return@withTimeoutOrNull null
-            val tagName = release["tag_name"]?.jsonPrimitive?.content
-                ?: return@withTimeoutOrNull null
-            val htmlUrl = release["html_url"]?.jsonPrimitive?.content
-                ?: return@withTimeoutOrNull null
-            val latestVersion = tagName.removePrefix("v")
-            if (isNewer(remote = latestVersion, local = BuildConfig.VERSION_NAME)) {
-                UpdateInfo(version = latestVersion, htmlUrl = htmlUrl)
-            } else null
+                .filter { it["draft"]?.jsonPrimitive?.content != "true" }
+                .mapNotNull { obj ->
+                    val tag = obj["tag_name"]?.jsonPrimitive?.content
+                        ?: return@mapNotNull null
+                    val html = obj["html_url"]?.jsonPrimitive?.content
+                        ?: return@mapNotNull null
+                    UpdateInfo(version = tag.removePrefix("v"), htmlUrl = html)
+                }
+                .toList()
+            pickNewerThan(candidates, BuildConfig.VERSION_NAME)
         }
     }.getOrNull()
+
+    /**
+     * Given a (possibly unordered) list of release candidates and the
+     * caller's local version, return the candidate that is strictly
+     * newer than [local] AND newer than every other candidate.
+     * Returns null if no candidate beats [local].
+     *
+     * Internal so unit tests can hammer it without touching HTTP.
+     */
+    internal fun pickNewerThan(candidates: List<UpdateInfo>, local: String): UpdateInfo? {
+        val newerThanLocal = candidates.filter { isNewer(remote = it.version, local = local) }
+        // maxWith uses the comparator's sign convention: positive means
+        // a > b. We define "a is newer than b" as positive 1, "b is
+        // newer than a" as negative 1, otherwise 0.
+        return newerThanLocal.maxWithOrNull { a, b ->
+            when {
+                isNewer(remote = a.version, local = b.version) -> 1
+                isNewer(remote = b.version, local = a.version) -> -1
+                else -> 0
+            }
+        }
+    }
 
     /**
      * Compare two semver-ish version strings. Returns true iff [remote]
