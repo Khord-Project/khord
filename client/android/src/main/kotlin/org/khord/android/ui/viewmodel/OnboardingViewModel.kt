@@ -71,6 +71,19 @@ class OnboardingViewModel : ViewModel() {
     private var confirmIndices: List<Int> = ConfirmIndices.pick()
 
     /**
+     * Set true by [acceptRecoveryPhrase] so the rest of the onboarding
+     * flow (server setup, registration progress screen) knows to skip
+     * SeedDisplay/SeedConfirm and to tweak copy ("Recovering identity…"
+     * vs "Generating identity…"). Read-only externally.
+     *
+     * Reset to false on a successful generate() so the same VM can be
+     * reused if the user backs out and starts a fresh-identity flow
+     * (unlikely but cheap).
+     */
+    var isRecovering: Boolean = false
+        private set
+
+    /**
      * User's chosen display name. Optional — if the user skips the prompt
      * we register as "Anonymous". Trimmed and capped to 64 chars to avoid
      * silly inputs filling the reply_info block on every message.
@@ -112,11 +125,41 @@ class OnboardingViewModel : ViewModel() {
                 val words = SeedPhrase.generate()
                 currentPhrase = words
                 confirmIndices = ConfirmIndices.pick(max = words.size)
+                isRecovering = false
                 _status.value = Status.Display(words)
             } catch (e: Throwable) {
                 _status.value = Status.Failed(e.message ?: "generate failed", cause = e)
             }
         }
+    }
+
+    /**
+     * Recovery entry point — see ADR 025. Stages a user-supplied phrase
+     * as the source of the identity to register. Validates against
+     * BIP39 (checksum + per-word membership) by round-tripping through
+     * [SeedPhrase.toEntropy] + [SeedPhrase.fromEntropy]; on failure
+     * throws the same [IllegalArgumentException] [SeedPhrase] uses, so
+     * the caller can surface a user-friendly error.
+     *
+     * After this call, [register] derives the identity from the
+     * recovered phrase deterministically — same words ⇒ same
+     * fingerprint ⇒ Key Server's challenge-response auth accepts the
+     * re-registration.
+     */
+    fun acceptRecoveryPhrase(words: List<String>) {
+        val normalized = words.map { it.trim().lowercase() }
+        // Round-trip to validate checksum + word membership. Throws
+        // IllegalArgumentException with a useful message on any
+        // failure mode.
+        val entropy = SeedPhrase.toEntropy(normalized)
+        val canonical = SeedPhrase.fromEntropy(entropy)
+        currentPhrase = canonical
+        isRecovering = true
+        // Recovery doesn't use the confirm-quiz path — but keep the
+        // indices consistent in case the user backs out and somehow
+        // ends up on SeedConfirm.
+        confirmIndices = ConfirmIndices.pick(max = canonical.size)
+        _status.value = Status.Idle
     }
 
     fun confirmIndices(): List<Int> = confirmIndices

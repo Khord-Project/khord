@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -40,6 +41,13 @@ fun WelcomeScreen(nav: NavController) {
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Generate identity")
+        }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { nav.navigate(Routes.SEED_RECOVERY) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("I already have a seed phrase")
         }
     }
 }

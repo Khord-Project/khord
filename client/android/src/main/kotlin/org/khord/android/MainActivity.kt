@@ -30,6 +30,7 @@ import org.khord.android.ui.screens.GroupInfoScreen
 import org.khord.android.ui.screens.RegistrationScreen
 import org.khord.android.ui.screens.SeedConfirmScreen
 import org.khord.android.ui.screens.SeedDisplayScreen
+import org.khord.android.ui.screens.SeedRecoveryScreen
 import org.khord.android.ui.screens.ServerSetupScreen
 import org.khord.android.ui.screens.SettingsScreen
 import org.khord.android.ui.screens.SplashScreen
@@ -118,6 +119,7 @@ private fun KhordNavGraph(
         composable(Routes.SERVER_SETUP) { ServerSetupScreen(nav) }
         composable(Routes.SEED_DISPLAY) { SeedDisplayScreen(nav) }
         composable(Routes.SEED_CONFIRM) { SeedConfirmScreen(nav) }
+        composable(Routes.SEED_RECOVERY) { SeedRecoveryScreen(nav) }
         composable(Routes.REGISTRATION) { RegistrationScreen(nav) }
         composable(Routes.CONTACTS) { ContactListScreen(nav) }
         composable(Routes.ADD_CONTACT) { AddContactScreen(nav) }
