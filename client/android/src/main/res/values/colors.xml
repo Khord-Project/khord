@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Launcher icon background. Referenced from
+        mipmap-anydpi-v26/ic_launcher{,_round}.xml as the adaptive-icon
+        background layer. Kept in sync (manually) with the legacy
+        bitmap launcher icons, where the same colour is baked into the
+        PNG canvas behind the logo. See feat/launcher-icons.
+    -->
+    <color name="ic_launcher_background">#0A0F0F</color>
+</resources>
