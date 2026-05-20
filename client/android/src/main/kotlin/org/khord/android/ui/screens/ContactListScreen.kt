@@ -1,6 +1,8 @@
 package org.khord.android.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +23,7 @@ import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -30,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -166,6 +170,9 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
                 if (state.rows.isEmpty()) {
                     EmptyState(error = state.error)
                 } else {
+                    var pendingDelete by remember {
+                        mutableStateOf<ContactListViewModel.Row?>(null)
+                    }
                     RecentChats(
                         rows = state.rows,
                         showAll = showAll,
@@ -178,7 +185,23 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
                                     nav.navigate(Routes.groupChat(row.id))
                             }
                         },
+                        onRowLongClick = { row -> pendingDelete = row },
                     )
+                    pendingDelete?.let { row ->
+                        DeleteConversationDialog(
+                            row = row,
+                            onConfirm = {
+                                when (row.kind) {
+                                    ContactListViewModel.Row.Kind.Contact ->
+                                        vm.deleteContact(row.id)
+                                    ContactListViewModel.Row.Kind.Group ->
+                                        vm.leaveGroup(row.id)
+                                }
+                                pendingDelete = null
+                            },
+                            onDismiss = { pendingDelete = null },
+                        )
+                    }
                 }
             }
         }
@@ -253,6 +276,7 @@ private fun RecentChats(
     showAll: Boolean,
     onToggleShowAll: () -> Unit,
     onRowClick: (ContactListViewModel.Row) -> Unit,
+    onRowLongClick: (ContactListViewModel.Row) -> Unit,
 ) {
     // Section header — always shown above the list.
     Column(modifier = Modifier.fillMaxSize()) {
@@ -266,7 +290,11 @@ private fun RecentChats(
 
         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
             items(visible) { row ->
-                ConversationRow(row, onClick = { onRowClick(row) })
+                ConversationRow(
+                    row = row,
+                    onClick = { onRowClick(row) },
+                    onLongClick = { onRowLongClick(row) },
+                )
                 HorizontalDivider()
             }
             if (rows.size > RECENT_CHATS_LIMIT) {
@@ -287,10 +315,62 @@ private fun RecentChats(
     }
 }
 
+/**
+ * Confirmation dialog raised by a long-press on a conversation row.
+ * The copy and the destructive action both branch on [Row.Kind]:
+ *
+ *   - Contact rows offer "Delete conversation with <name>?", warning
+ *     the user that the other person keeps their copy. On confirm we
+ *     call [ContactListViewModel.deleteContact].
+ *   - Group rows offer "Leave and delete group?", which fans out a
+ *     group_member_left payload to remaining members and then drops
+ *     the local group + members + messages. On confirm we call
+ *     [ContactListViewModel.leaveGroup].
+ */
+@Composable
+private fun DeleteConversationDialog(
+    row: ContactListViewModel.Row,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val (title, body) = when (row.kind) {
+        ContactListViewModel.Row.Kind.Contact ->
+            "Delete conversation with ${row.displayLabel}?" to
+                ("This will remove the contact and all messages from " +
+                    "your device. The other person will still have " +
+                    "their copy.")
+        ContactListViewModel.Row.Kind.Group ->
+            "Leave and delete group?" to
+                ("This will notify the other members that you've left, " +
+                    "then remove the group and all its messages from " +
+                    "your device. Other members keep their copy of " +
+                    "the conversation.")
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    if (row.kind == ContactListViewModel.Row.Kind.Group) "Leave"
+                    else "Delete",
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+        title = { Text(title) },
+        text = { Text(body) },
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationRow(
     row: ContactListViewModel.Row,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     // Mute the row visually when its contact's receiveMessages has
     // been failing repeatedly. Row stays tappable — the user can open
@@ -307,7 +387,10 @@ private fun ConversationRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -330,6 +330,37 @@ class Messaging internal constructor(
         contactsByFingerprint[fingerprint]?.displayName?.takeIf { it.isNotEmpty() }
 
     /**
+     * Forget a contact entirely. Drops:
+     *   - the in-memory [ContactSession] (so [contacts] and
+     *     [pushSubscriptions] both stop returning this fingerprint
+     *     immediately — the platform push service refreshing its
+     *     listener after this returns will tear down the WebSocket
+     *     for the contact's inbound mailbox)
+     *   - the in-memory [ContactInfo] cache
+     *   - the persisted contact row, session row, and every persisted
+     *     message (via [persistence.deleteContact], which transactions
+     *     all three tables together)
+     *
+     * Local-only. No Key Server or Relay Server call is made, no
+     * "I'm removing you" payload is sent to the contact — matches
+     * Khord's no-server-trace stance on contact lifecycle. The
+     * counterparty keeps their copy of the conversation; they only
+     * notice when their next outbound message bounces off the relay
+     * 404 (already surfaced as "Unavailable" in chat).
+     *
+     * No-op if the fingerprint is unknown.
+     */
+    suspend fun deleteContact(fingerprint: String) {
+        checkAlive()
+        val session = sessionForFingerprint(fingerprint)
+        if (session != null) {
+            sessionsByInboundMailbox.remove(session.inboundMailboxId)
+        }
+        contactsByFingerprint.remove(fingerprint)
+        persistence.deleteContact(fingerprint)
+    }
+
+    /**
      * Initiate an X3DH session with `contactFingerprint` and send the first
      * encrypted message.
      *

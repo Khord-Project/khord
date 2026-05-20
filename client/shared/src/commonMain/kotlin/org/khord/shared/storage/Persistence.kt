@@ -61,6 +61,24 @@ internal interface Persistence {
     suspend fun loadAllContacts(): List<ContactInfo>
     suspend fun updateContactDisplayName(fingerprint: String, displayName: String)
 
+    /**
+     * Remove a contact and every record that depends on it: the
+     * pairwise Double Ratchet session row, every persisted message,
+     * and the contact row itself. The relay-side mailbox binding is
+     * effectively dropped too because the WebSocket subscription is
+     * keyed off the session (caller is responsible for telling the
+     * push service to refresh after this returns).
+     *
+     * Local-only. Does NOT notify the contact and does NOT touch the
+     * Key/Relay servers — by design, per the "no server-side trace"
+     * stance.
+     *
+     * On [DbPersistence] this is one DELETE statement against the
+     * contact table; the message and session tables cascade-delete
+     * via ON DELETE CASCADE foreign keys.
+     */
+    suspend fun deleteContact(fingerprint: String)
+
     // ── Pending mailboxes ───────────────────────────────────────────────────
 
     suspend fun savePendingMailbox(mailboxId: String, bearerToken: String)

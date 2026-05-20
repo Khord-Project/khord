@@ -56,6 +56,22 @@ class SplashViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 Crypto.ensureInitialized()
                 val application: Application = getApplication()
+
+                // Snapshot the on-disk indicators BEFORE bootstrap runs.
+                // Bootstrap will create both files on first launch (the
+                // keystore blob during getOrCreateDatabasePassphrase, the
+                // DB file when SQLCipher opens it), so checking after
+                // bootstrap would always return true and the state-loss
+                // dialog would mis-fire for every brand-new install.
+                // See issue #11 — confirmed via the DiagnosticLog ring
+                // shipped in alpha.5.
+                val dbFileExists = File(
+                    application.getDatabasePath(ServerUrls.DB_NAME).absolutePath,
+                ).exists()
+                val prefsHaveBlob = application
+                    .getSharedPreferences("khord_keystore_blob", Context.MODE_PRIVATE)
+                    .getString("iv", null) != null
+
                 val loaded = AppContainer.bootstrap(application)
                 _state.value = if (loaded) {
                     SplashState.Loaded(
@@ -63,12 +79,6 @@ class SplashViewModel(app: Application) : AndroidViewModel(app) {
                             AppContainer.messaging?.needsServerRegistration ?: false,
                     )
                 } else {
-                    val dbFileExists = File(
-                        application.getDatabasePath(ServerUrls.DB_NAME).absolutePath,
-                    ).exists()
-                    val prefsHaveBlob = application
-                        .getSharedPreferences("khord_keystore_blob", Context.MODE_PRIVATE)
-                        .getString("iv", null) != null
                     val keystoreRegenerated = AppContainer.bootstrapRegeneratedKeystore
                     SplashState.NeedsOnboarding(
                         previouslySetUp = dbFileExists || prefsHaveBlob || keystoreRegenerated,

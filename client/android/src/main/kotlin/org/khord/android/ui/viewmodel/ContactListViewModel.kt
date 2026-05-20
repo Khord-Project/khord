@@ -86,6 +86,51 @@ class ContactListViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Delete a contact + every message + session/ratchet state for it.
+     * Local-only — see [org.khord.shared.protocol.orchestrator.Messaging.deleteContact].
+     * After persistence completes, refresh the list and ping the push
+     * service so the WebSocket for the now-gone mailbox is torn down.
+     */
+    fun deleteContact(fingerprint: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                try {
+                    val messaging = AppContainer.messaging ?: error("messaging not initialised")
+                    messaging.deleteContact(fingerprint)
+                    (PlatformContextProvider.get() as? Context)?.let { ctx ->
+                        runCatching { PushServiceController.refresh(ctx) }
+                    }
+                } catch (e: Throwable) {
+                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                    return@withLock
+                }
+            }
+            // Refresh outside the mutex — refresh() takes it itself.
+            refresh(pollServer = false)
+        }
+    }
+
+    /**
+     * Leave a group AND delete every local trace of it. Fan-out
+     * notifications to remaining members happens inside
+     * [org.khord.shared.protocol.orchestrator.Messaging.leaveGroup].
+     */
+    fun leaveGroup(groupId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                try {
+                    val messaging = AppContainer.messaging ?: error("messaging not initialised")
+                    messaging.leaveGroup(groupId)
+                } catch (e: Throwable) {
+                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                    return@withLock
+                }
+            }
+            refresh(pollServer = false)
+        }
+    }
+
     /** Pull-to-refresh: poll pending mailboxes for new contacts, then reload list. */
     fun refresh(pollServer: Boolean = true) {
         viewModelScope.launch(Dispatchers.IO) {

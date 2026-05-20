@@ -82,6 +82,45 @@ class InMemoryPersistenceTest {
     }
 
     @Test
+    fun deleteContact_removes_contact_session_and_all_messages_for_that_contact() = runTest {
+        val p = InMemoryPersistence()
+        val aliceFp = "a".repeat(64)
+        val bobFp = "b".repeat(64)
+        val aliceQr = QrPayload(
+            identityKey = "AAAA",
+            fingerprint = aliceFp,
+            keyServer = "https://ks",
+            relayServer = "https://rs",
+            relayMailbox = "alice-mailbox-id-22-aaaa",
+        )
+        val bobQr = aliceQr.copy(fingerprint = bobFp, relayMailbox = "bob-mailbox-id-22-bbbbbb")
+        p.saveContact(aliceQr, "Alice")
+        p.saveContact(bobQr, "Bob")
+        p.saveMessage(aliceFp, MessageDirection.SENT, "hi alice", "2026-05-05T00:00:00Z")
+        p.saveMessage(aliceFp, MessageDirection.RECEIVED, "hey", "2026-05-05T00:00:01Z")
+        p.saveMessage(bobFp, MessageDirection.SENT, "hi bob", "2026-05-05T00:00:02Z")
+
+        p.deleteContact(aliceFp)
+
+        // Alice + her messages + her session gone.
+        assertNull(p.loadContact(aliceFp))
+        assertEquals(0, p.loadMessages(aliceFp).size)
+        assertNull(p.loadSession(aliceFp))
+        // Bob completely untouched.
+        assertEquals("Bob", p.loadContact(bobFp)!!.displayName)
+        assertEquals(1, p.loadMessages(bobFp).size)
+        assertEquals(1, p.loadAllContacts().size)
+    }
+
+    @Test
+    fun deleteContact_is_a_noop_for_unknown_fingerprint() = runTest {
+        val p = InMemoryPersistence()
+        // Just shouldn't throw — store stays empty.
+        p.deleteContact("z".repeat(64))
+        assertEquals(0, p.loadAllContacts().size)
+    }
+
+    @Test
     fun pending_mailbox_lifecycle() = runTest {
         val p = InMemoryPersistence()
         p.savePendingMailbox("mid-1", "tok-1")

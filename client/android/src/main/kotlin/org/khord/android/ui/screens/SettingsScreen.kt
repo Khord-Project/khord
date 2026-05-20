@@ -45,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import org.khord.android.AppContainer
+import org.khord.android.BuildConfig
 import org.khord.android.ui.theme.KhordThemeChoice
 import org.khord.android.ui.theme.swatchColor
 import org.khord.android.ui.viewmodel.SettingsViewModel
@@ -133,6 +134,10 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Panic") }
+
+                Spacer(Modifier.height(24.dp))
+
+                AppVersionFooter()
             }
         }
     }
@@ -162,6 +167,32 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
             },
         )
     }
+}
+
+/**
+ * Footer row with `App version: <versionName>`. For non-prod-release
+ * builds also shows the flavor + build type so testers can confirm
+ * which APK they're running at a glance (helpful for diagnosing
+ * "wait, am I on dev or prod?" confusion).
+ *
+ * Small, muted, non-interactive — purely informational. Placed at the
+ * end of the Settings column.
+ */
+@Composable
+private fun AppVersionFooter() {
+    val versionName = BuildConfig.VERSION_NAME
+    val isProdRelease = BuildConfig.BUILD_TYPE == "release" && !BuildConfig.IS_DEV_FLAVOR
+    val label = if (isProdRelease) {
+        "App version: $versionName"
+    } else {
+        val flavor = if (BuildConfig.IS_DEV_FLAVOR) "dev" else "prod"
+        "App version: $versionName ($flavor / ${BuildConfig.BUILD_TYPE})"
+    }
+    Text(
+        label,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /**
