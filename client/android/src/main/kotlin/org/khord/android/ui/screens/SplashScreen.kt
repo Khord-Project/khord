@@ -26,6 +26,7 @@ import org.khord.android.push.PushServiceController
 import org.khord.android.ui.viewmodel.SplashState
 import org.khord.android.ui.viewmodel.SplashViewModel
 import org.khord.android.util.BugReporter
+import org.khord.shared.diagnostic.DiagnosticLog
 
 @Composable
 fun SplashScreen(nav: NavController, vm: SplashViewModel = viewModel()) {
@@ -37,15 +38,16 @@ fun SplashScreen(nav: NavController, vm: SplashViewModel = viewModel()) {
         when (val s = state) {
             is SplashState.NeedsOnboarding -> {
                 if (s.previouslySetUp && stateLossPrompt == null) {
-                    android.util.Log.w(
+                    DiagnosticLog.log(
                         "Khord",
                         "Splash: identity gone but leftover state " +
-                            "(db=${s.dbFileExists}, prefs=${s.prefsHaveBlob}) — " +
+                            "(db=${s.dbFileExists}, prefs=${s.prefsHaveBlob}, " +
+                            "keystoreRegen=${s.keystoreRegenerated}) — " +
                             "offering diagnostic report",
                     )
                     stateLossPrompt = buildStateLossReport(s)
                 } else {
-                    android.util.Log.w("Khord", "Splash: no identity found, routing to Welcome")
+                    DiagnosticLog.log("Khord", "Splash: no identity found, routing to Welcome")
                     nav.navigate(Routes.WELCOME) {
                         popUpTo(nav.graph.startDestinationId) { inclusive = true }
                         launchSingleTop = true
@@ -54,9 +56,9 @@ fun SplashScreen(nav: NavController, vm: SplashViewModel = viewModel()) {
             }
             is SplashState.Loaded -> {
                 if (s.needsServerRegistration) {
-                    android.util.Log.w("Khord", "Splash: needs server registration, routing to Registration")
+                    DiagnosticLog.log("Khord", "Splash: needs server registration, routing to Registration")
                 } else {
-                    android.util.Log.w("Khord", "Splash: loaded existing identity")
+                    DiagnosticLog.log("Khord", "Splash: loaded existing identity")
                     // Returning user with a fully registered identity —
                     // fire up the push service so they receive
                     // notifications while the app is in the background.
@@ -119,17 +121,25 @@ private fun buildStateLossReport(s: SplashState.NeedsOnboarding): BugReporter.Re
     val ctx = buildString {
         appendLine("db_file_exists=${s.dbFileExists}")
         appendLine("prefs_blob_exists=${s.prefsHaveBlob}")
+        appendLine("keystore_regenerated=${s.keystoreRegenerated}")
         appendLine("miui_display=${Build.DISPLAY}")
+    }
+    val rootCause = if (s.keystoreRegenerated) {
+        "state_loss: Keystore key invalidated — DB orphan deleted, " +
+            "identity unrecoverable without seed phrase " +
+            "(db_before=${s.dbFileExists}, prefs_before=${s.prefsHaveBlob})"
+    } else {
+        "state_loss: bootstrap returned no identity despite leftover " +
+            "state (db=${s.dbFileExists}, prefs=${s.prefsHaveBlob})"
     }
     return BugReporter.Report(
         appVersion = BuildConfig.VERSION_NAME,
         androidVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
         deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
-        errorMessage = "state_loss: bootstrap returned no identity " +
-            "despite leftover state (db=${s.dbFileExists}, " +
-            "prefs=${s.prefsHaveBlob})",
+        errorMessage = rootCause,
         stackTrace = null,
-        diagnosticPath = null,
+        diagnosticPath = BugReporter.scrubSensitive(DiagnosticLog.dump())
+            .takeIf { it.isNotEmpty() },
         additionalContext = ctx,
     )
 }

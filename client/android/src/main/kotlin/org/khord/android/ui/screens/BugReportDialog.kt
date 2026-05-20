@@ -93,7 +93,14 @@ fun BugReportDialog(
             preBuiltReport != null -> {
                 if (additionalContext.isBlank()) preBuiltReport
                 else preBuiltReport.copy(
-                    additionalContext = BugReporter.scrubSensitive(additionalContext),
+                    // Append, don't replace — preBuiltReport already
+                    // carries machine-collected diagnostic context
+                    // (e.g. state-loss flags from SplashScreen) that we
+                    // need to keep alongside the user's free-text note.
+                    additionalContext = listOfNotNull(
+                        preBuiltReport.additionalContext,
+                        BugReporter.scrubSensitive(additionalContext),
+                    ).joinToString("\n---\n"),
                 )
             }
             error != null -> BugReporter.collect(error, additionalContext.ifBlank { null })

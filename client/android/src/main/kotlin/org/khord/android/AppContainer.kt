@@ -92,6 +92,21 @@ object AppContainer {
         availableUpdate.value = null
     }
 
+    /**
+     * One-shot signal: did the most recent [bootstrap] hit the
+     * Keystore-invalidation recovery path? Set to true when the
+     * keystore had to regenerate the DB passphrase AND the orphaned
+     * `khord.db` file existed on disk (the Xiaomi / MIUI symptom).
+     *
+     * Read by SplashViewModel — the state-loss dialog needs to fire
+     * even after the orphan was deleted, by which point the on-disk
+     * heuristics (db file exists, prefs blob exists) are no longer
+     * true. The flag is in-memory only; a fresh cold start clears it.
+     */
+    @Volatile
+    var bootstrapRegeneratedKeystore: Boolean = false
+        private set
+
     fun recordReceiveFailure(fingerprint: String) {
         contactReceiveFailures.update { current ->
             current + (fingerprint to ((current[fingerprint] ?: 0) + 1))
@@ -165,9 +180,13 @@ object AppContainer {
         val b = try {
             Khord.open(httpClient, dbName, ks)
         } catch (e: Throwable) {
+            org.khord.shared.diagnostic.DiagnosticLog.log(
+                "Khord", "Messaging.load failed: ${e.message}",
+            )
             android.util.Log.e("Khord", "Messaging.load failed", e)
             http = httpClient
             keyStore = ks
+            bootstrapRegeneratedKeystore = ks.lastLoadRegeneratedKey
             return false
         }
 
@@ -175,6 +194,7 @@ object AppContainer {
         keyStore = ks
         bootstrap = b
         messaging = b.messaging
+        bootstrapRegeneratedKeystore = ks.lastLoadRegeneratedKey
         return b.messaging != null
     }
 
@@ -198,6 +218,7 @@ object AppContainer {
         pushConnected.value = emptySet()
         contactReceiveFailures.value = emptyMap()
         availableUpdate.value = null
+        bootstrapRegeneratedKeystore = false
     }
 }
 

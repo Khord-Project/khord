@@ -20,17 +20,26 @@ sealed interface SplashState {
     /**
      * No identity persisted — go to onboarding.
      *
-     * [previouslySetUp] is true when bootstrap found leftover state
-     * (the database file or the Keystore-backed prefs blob) but
-     * couldn't load an identity. On MIUI / Xiaomi this is the
-     * "battery saver cleared our data" path; the splash screen
-     * uses it to offer a diagnostic report before sending the
-     * user to Welcome.
+     * [previouslySetUp] is true when bootstrap found ANY leftover state
+     * (the database file, the Keystore-backed prefs blob, OR a
+     * just-regenerated Keystore key) but couldn't load an identity. On
+     * MIUI / Xiaomi this is the "Keystore invalidated / battery saver
+     * cleared our data" path; the splash screen uses it to offer a
+     * diagnostic report before sending the user to Welcome.
+     *
+     * Note that [keystoreRegenerated] is a separate signal because the
+     * orphan-cleanup path in DbPersistenceFactory deletes the DB AND
+     * the prefs blob is already cleared by the keystore catch — so by
+     * the time we check, both file-existence heuristics may read false
+     * even though state loss DID happen. Without this third flag the
+     * dialog would silently not fire on exactly the case we built it
+     * to catch.
      */
     data class NeedsOnboarding(
         val previouslySetUp: Boolean = false,
         val dbFileExists: Boolean = false,
         val prefsHaveBlob: Boolean = false,
+        val keystoreRegenerated: Boolean = false,
     ) : SplashState
     /** Identity loaded; routing target depends on registeredAtServer. */
     data class Loaded(val needsServerRegistration: Boolean) : SplashState
@@ -60,10 +69,12 @@ class SplashViewModel(app: Application) : AndroidViewModel(app) {
                     val prefsHaveBlob = application
                         .getSharedPreferences("khord_keystore_blob", Context.MODE_PRIVATE)
                         .getString("iv", null) != null
+                    val keystoreRegenerated = AppContainer.bootstrapRegeneratedKeystore
                     SplashState.NeedsOnboarding(
-                        previouslySetUp = dbFileExists || prefsHaveBlob,
+                        previouslySetUp = dbFileExists || prefsHaveBlob || keystoreRegenerated,
                         dbFileExists = dbFileExists,
                         prefsHaveBlob = prefsHaveBlob,
+                        keystoreRegenerated = keystoreRegenerated,
                     )
                 }
                 // Bootstrap finished — AppContainer.http is now set.
