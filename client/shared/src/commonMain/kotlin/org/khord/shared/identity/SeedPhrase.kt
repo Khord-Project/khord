@@ -121,6 +121,14 @@ object SeedPhrase {
     fun toCanonicalString(words: List<String>): String =
         words.joinToString(" ") { it.lowercase() }
 
+    /**
+     * True iff [word] (lowercased) is in the BIP39 English wordlist.
+     * Useful for live UI validation in the seed-phrase recovery flow
+     * (ADR 025) so the user gets per-word feedback before submitting
+     * the full phrase.
+     */
+    fun isValidWord(word: String): Boolean = word.lowercase() in WORD_INDEX
+
     private val WORD_INDEX: Map<String, Int> by lazy {
         BIP39_ENGLISH_WORDS.withIndex().associate { (i, w) -> w to i }
     }

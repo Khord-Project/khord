@@ -59,7 +59,15 @@ fun ServerSetupScreen(
 
     LaunchedEffect(status) {
         if (status is ServerSetupViewModel.Status.Success) {
-            nav.navigate(Routes.SEED_DISPLAY)
+            // Recovery flow (ADR 025) skips the SeedDisplay/SeedConfirm
+            // pair — the user already has their phrase and accepted it
+            // on the previous screen. Jump straight to RegistrationScreen
+            // which calls register() and reuses its progress UI.
+            val isRecovering = org.khord.android.AppContainer
+                .onboardingViewModel?.isRecovering == true
+            nav.navigate(
+                if (isRecovering) Routes.REGISTRATION else Routes.SEED_DISPLAY,
+            )
         }
     }
 

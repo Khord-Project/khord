@@ -94,26 +94,47 @@ private fun FreshOnboardingBody(vm: OnboardingViewModel, nav: NavController) {
         is OnboardingViewModel.Status.Idle,
         is OnboardingViewModel.Status.Display -> {
             // Pre-register prompt — let the user pick a display name.
-            Text("Almost done", style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "What should contacts call you?",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Optional. If you skip this, your contacts will see " +
-                    "\"Anonymous\" until you set a name later.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "If you've used Khord before, your contacts will need to " +
-                    "add you again with your new identity.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // Copy diverges between the fresh-onboarding path and the
+            // seed-phrase recovery path (ADR 025); everything below the
+            // headline (name input, button) is identical.
+            if (vm.isRecovering) {
+                Text("Recovering identity", style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Your identity (fingerprint) will be restored from the " +
+                        "seed phrase you entered. Pick a display name your " +
+                        "contacts will see.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "You'll need to re-add your contacts after recovery, but " +
+                        "their app will recognise you by your original identity.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text("Almost done", style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "What should contacts call you?",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Optional. If you skip this, your contacts will see " +
+                        "\"Anonymous\" until you set a name later.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "If you've used Khord before, your contacts will need to " +
+                        "add you again with your new identity.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(16.dp))
             OutlinedTextField(
                 value = displayNameInput,
@@ -139,8 +160,12 @@ private fun FreshOnboardingBody(vm: OnboardingViewModel, nav: NavController) {
             Text("Generating phrase…")
         }
         is OnboardingViewModel.Status.Registering -> {
-            Text("Deriving keys + uploading bundle…",
-                style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (vm.isRecovering)
+                    "Re-deriving keys + re-registering your identity…"
+                else "Deriving keys + uploading bundle…",
+                style = MaterialTheme.typography.bodyMedium,
+            )
             Spacer(Modifier.height(16.dp))
             CircularProgressIndicator()
         }

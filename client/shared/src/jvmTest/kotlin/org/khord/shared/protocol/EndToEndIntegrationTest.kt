@@ -252,4 +252,172 @@ class EndToEndIntegrationTest {
             bobPersist.close()
         }
     }
+
+    /**
+     * Seed-phrase recovery — the load-bearing test for ADR 025.
+     *
+     * Alice and Bob exchange messages. Alice then loses ALL state
+     * (orchestrator + persistence + keystore). Alice re-derives her
+     * identity from the SAME seed phrase, opens a fresh persistence
+     * with a fresh keystore, and re-registers on the Key Server. She
+     * then sends a new X3DH initial to Bob — landing on Bob's
+     * ALREADY-BOUND inbound mailbox (the same one he gave her in the
+     * original QR, since real-world testers might re-use the same
+     * printed QR).
+     *
+     * Expected behaviour (ADR 025):
+     *   - Bob's `receiveMessages` detects the X3DH initial on the
+     *     bound mailbox, runs `applyX3dhInitialReset`, replaces the
+     *     stale session in-place, decrypts the new first message.
+     *   - A "Session reset" marker is inserted into Bob's local
+     *     message log just before the new first message.
+     *   - Both directions of the conversation work afterward.
+     *   - Older messages from before the reset stay readable in
+     *     Bob's history.
+     */
+    @Test
+    fun seed_phrase_recovery_resets_session_on_known_fingerprint() = runTest(timeout = kotlin.time.Duration.parse("90s")) {
+        if (!isEnabled) return@runTest
+        Crypto.ensureInitialized()
+
+        val tempDir = kotlin.io.path.createTempDirectory("khord-recovery").toFile().apply {
+            deleteOnExit()
+        }
+        val aliceDb1 = "${tempDir.absolutePath}/alice1-${System.nanoTime()}.db"
+        val aliceDb2 = "${tempDir.absolutePath}/alice2-${System.nanoTime()}.db"
+        val bobDb = "${tempDir.absolutePath}/bob-${System.nanoTime()}.db"
+
+        // Alice's seed — the entire premise: same input here ⇒ same
+        // IdentityKey ⇒ same fingerprint ⇒ Key Server accepts the
+        // re-registration. The seed string is the canonical
+        // space-joined word form a real recovery flow would feed in
+        // (the UI calls SeedPhrase.toCanonicalString first).
+        val aliceSeed = "alice recovery ${System.nanoTime()}"
+        val bobSeed = "bob recovery ${System.nanoTime()}"
+        val bobIdentity = IdentityKey.fromSeedPhrase(bobSeed)
+
+        // Bob's keystore is shared across phases — he hasn't lost
+        // state, so SQLCipher must decrypt his DB with the SAME
+        // passphrase across reloads. Alice's keystore is recreated
+        // in phase 2 (she lost it; that's the whole point).
+        val bobKs = org.khord.shared.storage.InMemoryKeyStore()
+
+        // ─── Phase 1: original install, Alice ↔ Bob exchange ───────
+        val (bobQr, aliceFingerprint) = run {
+            val aliceIdentity = IdentityKey.fromSeedPhrase(aliceSeed)
+            val aliceHttp = khordHttpClient(Java)
+            val bobHttp = khordHttpClient(Java)
+            val alicePersist = org.khord.shared.storage.openDbPersistence(
+                aliceDb1, org.khord.shared.storage.InMemoryKeyStore(),
+            )
+            val bobPersist = org.khord.shared.storage.openDbPersistence(bobDb, bobKs)
+            val alice = org.khord.shared.protocol.orchestrator.Messaging.createWithPersistence(
+                aliceIdentity, keyServerUrl, relayServerUrl, aliceHttp, alicePersist,
+                displayName = "Alice",
+            )
+            val bob = org.khord.shared.protocol.orchestrator.Messaging.createWithPersistence(
+                bobIdentity, keyServerUrl, relayServerUrl, bobHttp, bobPersist,
+                displayName = "Bob",
+            )
+            alice.register(opkBatchSize = 5)
+            bob.register(opkBatchSize = 5)
+
+            val bobQr = bob.myQrPayload()
+            val aliceQr = alice.myQrPayload()
+            alice.storeContact(bobQr)
+
+            val aliceContact = alice.initiateContact(
+                contactFingerprint = bobQr.fingerprint,
+                myInboundMailboxId = aliceQr.relayMailbox,
+                firstMessage = "before-recovery",
+            )
+            val newContacts = bob.pollPendingMailboxes()
+            assertEquals(1, newContacts.size)
+            val bobContact = newContacts[0].session
+            assertEquals("before-recovery", newContacts[0].firstMessage)
+
+            // Exchange one round so both sides have a meaningfully
+            // advanced ratchet (the reset path replaces THIS state).
+            bob.sendMessage(bobContact, "hi-back-before-recovery")
+            assertEquals(
+                listOf("hi-back-before-recovery"),
+                alice.receiveMessages(aliceContact),
+            )
+
+            alicePersist.close()
+            bobPersist.close()
+            bobQr to aliceIdentity.fingerprint
+        }
+
+        // ─── Phase 2: Alice recovers from seed phrase ───────────────
+        val aliceHttp = khordHttpClient(Java)
+        val alicePersist2 = org.khord.shared.storage.openDbPersistence(
+            aliceDb2, org.khord.shared.storage.InMemoryKeyStore(),
+        )
+        // Same seed → same identity → same fingerprint.
+        val aliceRecoveredIdentity = IdentityKey.fromSeedPhrase(aliceSeed)
+        assertEquals(
+            aliceFingerprint,
+            aliceRecoveredIdentity.fingerprint,
+            "seed phrase recovery must be deterministic",
+        )
+
+        val aliceRecovered = org.khord.shared.protocol.orchestrator.Messaging.createWithPersistence(
+            aliceRecoveredIdentity, keyServerUrl, relayServerUrl, aliceHttp, alicePersist2,
+            displayName = "Alice",
+        )
+        // Re-registration MUST succeed — the Key Server's identity-key
+        // match check accepts it because the re-derived public key is
+        // bit-identical.
+        aliceRecovered.register(opkBatchSize = 5)
+
+        // Alice re-scans Bob's original QR (same printed card, same
+        // mailbox). Sends a fresh X3DH initial to Bob's now-BOUND
+        // mailbox.
+        aliceRecovered.storeContact(bobQr)
+        val aliceQr2 = aliceRecovered.myQrPayload()
+        val aliceContact2 = aliceRecovered.initiateContact(
+            contactFingerprint = bobQr.fingerprint,
+            myInboundMailboxId = aliceQr2.relayMailbox,
+            firstMessage = "hello-from-recovered-alice",
+        )
+
+        // ─── Phase 3: Bob reloads, polls the bound mailbox ──────────
+        val bobHttp = khordHttpClient(Java)
+        val bobPersist2 = org.khord.shared.storage.openDbPersistence(bobDb, bobKs)
+        val bob2 = org.khord.shared.protocol.orchestrator.Messaging.load(bobHttp, bobPersist2)
+            ?: error("bob's identity should reload from $bobDb")
+        val bobContact2 = bob2.contacts().single()
+
+        // The actual reset path: receiveMessages encounters a
+        // WireEnvelope.X3dhInitial on the bound mailbox, runs the
+        // reset, decrypts under the new ratchet.
+        val received = bob2.receiveMessages(bobContact2)
+        assertEquals(listOf("hello-from-recovered-alice"), received)
+
+        // ─── Phase 4: continued conversation under fresh session ────
+        bob2.sendMessage(bob2.contacts().single(), "ack-after-reset")
+        assertEquals(
+            listOf("ack-after-reset"),
+            aliceRecovered.receiveMessages(aliceContact2),
+        )
+
+        // ─── Phase 5: history sanity ────────────────────────────────
+        // Bob's history with Alice should include: the original
+        // "before-recovery" line, the "[session reset]" marker, and
+        // the new "hello-from-recovered-alice".
+        val bobHistory = bob2.messageHistory(aliceFingerprint).map { it.body }
+        assertTrue("before-recovery" in bobHistory, "old message lost: $bobHistory")
+        assertTrue(
+            bobHistory.any { it.contains("Session reset") },
+            "expected reset marker in bob's history: $bobHistory",
+        )
+        assertTrue(
+            "hello-from-recovered-alice" in bobHistory,
+            "post-reset message missing: $bobHistory",
+        )
+
+        alicePersist2.close()
+        bobPersist2.close()
+    }
 }

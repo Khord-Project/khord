@@ -584,6 +584,25 @@ class Messaging internal constructor(
             inboundBearerToken = bearerTokenForMailbox,
             session = session,
         )
+        // Case B (seed-phrase recovery / reinstall, ADR 025): if a
+        // session for this fingerprint already exists under a
+        // DIFFERENT inbound mailbox, drop the stale in-memory entry
+        // before binding the new one. The persisted session row is
+        // keyed by contact_fingerprint (PK) so [persistSession] below
+        // will UPSERT-overwrite it; the in-memory map is keyed by
+        // inbound mailbox so without this cleanup the user would see
+        // the contact listed twice until the next app restart and
+        // the dead WebSocket subscription would keep running.
+        //
+        // Message history is preserved — only the session metadata
+        // is replaced. A reset marker is inserted so the chat reads
+        // continuously across the recovery boundary.
+        val existingSession = sessionForFingerprint(initiatorFp)
+        if (existingSession != null &&
+            existingSession.inboundMailboxId != myInboundMailbox) {
+            sessionsByInboundMailbox.remove(existingSession.inboundMailboxId)
+            saveSessionResetMarker(initiatorFp)
+        }
         sessionsByInboundMailbox[myInboundMailbox] = contactSession
         persistSession(contactSession)
         return contactSession to text
@@ -657,16 +676,56 @@ class Messaging internal constructor(
         )
         if (fetched.isEmpty()) return emptyList()
 
+        // The session this method drives can change mid-batch if an
+        // inbound X3DH initial triggers a reset (seed-phrase recovery
+        // path — see [applyX3dhInitialReset] and ADR 025). Use a local
+        // var so subsequent ratchet envelopes in the same fetch batch
+        // decrypt under the post-reset session.
+        var currentContact = contact
         val plaintexts = mutableListOf<String>()
         for (m in fetched) {
             val envelope = decodeEnvelope(Base64Std.decode(m.blob))
-            val (header, ciphertext) = when (envelope) {
-                is WireEnvelope.Ratchet -> Base64Std.decode(envelope.header) to
-                        Base64Std.decode(envelope.ciphertext)
-                is WireEnvelope.X3dhInitial -> Base64Std.decode(envelope.header) to
-                        Base64Std.decode(envelope.ciphertext)
+            if (envelope is WireEnvelope.X3dhInitial) {
+                // Case A: an X3DH initial landed on an already-bound
+                // mailbox. This means the counterparty lost their state
+                // (reinstall / seed-phrase recovery) and started a fresh
+                // X3DH against our existing mailbox. Reset the session
+                // in-place; the helper persists the new state, drops a
+                // visible "Session reset" marker into the chat log, and
+                // saves the decrypted first message. On fingerprint
+                // mismatch the helper throws, which we catch + log so a
+                // hostile / malformed envelope can't take down the whole
+                // poll.
+                try {
+                    val (resetContact, text) = applyX3dhInitialReset(
+                        currentContact,
+                        envelope,
+                    )
+                    sessionsByInboundMailbox[currentContact.inboundMailboxId] =
+                        resetContact
+                    currentContact = resetContact
+                    plaintexts += text
+                } catch (e: Throwable) {
+                    // Don't fail the whole poll — log diagnostically
+                    // and skip this envelope. The wider receive loop
+                    // still acks all envelopes up to the highest
+                    // sequence (below), so a malformed initial doesn't
+                    // wedge the mailbox.
+                    org.khord.shared.diagnostic.commonDiagnosticLog(
+                        "Khord",
+                        "receiveMessages: dropped X3DH initial on " +
+                            "bound mailbox ${currentContact.inboundMailboxId}: " +
+                            "${e::class.simpleName}: ${e.message}",
+                    )
+                }
+                continue
             }
-            val plaintextBytes = contact.session.decrypt(header, ciphertext)
+            // Ratchet envelope — the normal hot path.
+            val ratchet = envelope as WireEnvelope.Ratchet
+            val plaintextBytes = currentContact.session.decrypt(
+                Base64Std.decode(ratchet.header),
+                Base64Std.decode(ratchet.ciphertext),
+            )
             val payload = KhordJson.decodeFromString(
                 InnerPayload.serializer(),
                 plaintextBytes.decodeToString(),
@@ -676,12 +735,12 @@ class Messaging internal constructor(
             // type — runs before the dispatch so group_* payloads also
             // refresh the sender's name.
             payload.replyInfo?.let { ri ->
-                val current = contactsByFingerprint[contact.contactFingerprint]
+                val current = contactsByFingerprint[currentContact.contactFingerprint]
                 if (current != null && current.displayName != ri.displayName) {
-                    contactsByFingerprint[contact.contactFingerprint] =
+                    contactsByFingerprint[currentContact.contactFingerprint] =
                         current.copy(displayName = ri.displayName)
                     persistence.updateContactDisplayName(
-                        contact.contactFingerprint,
+                        currentContact.contactFingerprint,
                         ri.displayName,
                     )
                 }
@@ -692,11 +751,11 @@ class Messaging internal constructor(
             // text path (where unknown types still raise
             // UnsupportedPayloadType, preserving the original contract).
             when (payload.type) {
-                "group_invite" -> handleGroupInvite(contact, payload)
-                "group_message" -> handleGroupMessage(contact, payload)
-                "group_member_added" -> handleGroupMemberAdded(contact, payload)
-                "group_member_left" -> handleGroupMemberLeft(contact, payload)
-                "group_name_changed" -> handleGroupNameChanged(contact, payload)
+                "group_invite" -> handleGroupInvite(currentContact, payload)
+                "group_message" -> handleGroupMessage(currentContact, payload)
+                "group_member_added" -> handleGroupMemberAdded(currentContact, payload)
+                "group_member_left" -> handleGroupMemberLeft(currentContact, payload)
+                "group_name_changed" -> handleGroupNameChanged(currentContact, payload)
                 else -> {
                     // Legacy one-to-one text path. decodeInnerPayloadText
                     // throws on unknown types, which is the documented
@@ -704,7 +763,7 @@ class Messaging internal constructor(
                     val text = decodeInnerPayloadText(payload)
                     plaintexts += text
                     persistence.saveMessage(
-                        contactFingerprint = contact.contactFingerprint,
+                        contactFingerprint = currentContact.contactFingerprint,
                         direction = org.khord.shared.storage.MessageDirection.RECEIVED,
                         body = text,
                         timestamp = payload.timestamp,
@@ -715,13 +774,15 @@ class Messaging internal constructor(
 
         val highestSequence = fetched.last().sequence
         rsClient.acknowledge(
-            mailboxId = contact.inboundMailboxId,
-            bearerToken = contact.inboundBearerToken,
+            mailboxId = currentContact.inboundMailboxId,
+            bearerToken = currentContact.inboundBearerToken,
             throughSequence = highestSequence,
         )
-        contact.lastFetchedSequence = highestSequence
-        persistence.updateLastFetchedSequence(contact.contactFingerprint, highestSequence)
-        persistSession(contact)
+        currentContact.lastFetchedSequence = highestSequence
+        persistence.updateLastFetchedSequence(
+            currentContact.contactFingerprint, highestSequence,
+        )
+        persistSession(currentContact)
         return plaintexts
     }
 
@@ -1163,6 +1224,159 @@ class Messaging internal constructor(
         return payload.body ?: throw ProtocolError.WireFormatError("text payload missing body")
     }
 
+    /**
+     * Save a "session was reset" marker into the local message log for
+     * [fingerprint]. Direction is RECEIVED so it appears on the
+     * counterparty's bubble side — semantically the reset was driven
+     * by something the OTHER party did (re-install, recovery), and the
+     * local user is the passive observer. The body uses a stable
+     * prefix that the chat layer can detect later if we want to
+     * upgrade rendering without a schema change.
+     */
+    private suspend fun saveSessionResetMarker(fingerprint: String) {
+        persistence.saveMessage(
+            contactFingerprint = fingerprint,
+            direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+            body = SESSION_RESET_MARKER_BODY,
+            timestamp = kotlinx.datetime.Clock.System.now().toString(),
+        )
+    }
+
+    /**
+     * Process an X3DH initial that landed on an ALREADY-bound inbound
+     * mailbox — the seed-phrase-recovery / app-reinstall path.
+     *
+     * Verifies that the new initial's identity hashes to the same
+     * fingerprint we already know for [oldContact] (anti-impersonation
+     * gate — without this, anyone who knows the contact's public
+     * identity key could force a session reset and DoS the channel).
+     *
+     * On verification success: runs [X3dh.respond] to derive a fresh
+     * shared secret, bootstraps a new ratchet via
+     * [Session.fromResponder], decrypts the first message, and returns
+     * a new [ContactSession] keyed by the SAME inbound mailbox (we
+     * still own that mailbox — only the counterparty's state was
+     * lost). The replaced session is also written through to
+     * persistence (UPSERT on contact_fingerprint PK overwrites the
+     * old session row).
+     *
+     * Caller is responsible for inserting the result into
+     * [sessionsByInboundMailbox] in place of [oldContact].
+     *
+     * Inserts a "session reset" marker into the message log BEFORE
+     * the decrypted first message so the chat reads naturally on the
+     * user's next visit.
+     *
+     * On fingerprint mismatch, throws [ProtocolError.WireFormatError]
+     * — the caller should log and skip the envelope (no reset).
+     *
+     * See ADR 025 for design rationale.
+     */
+    private suspend fun applyX3dhInitialReset(
+        oldContact: ContactSession,
+        envelope: WireEnvelope.X3dhInitial,
+    ): Pair<ContactSession, String> {
+        val ikA = Base64Std.decode(envelope.ikA)
+        val ekA = Base64Std.decode(envelope.ekA)
+        val initiatorFp = identityFingerprint(ikA)
+        if (initiatorFp != oldContact.contactFingerprint) {
+            throw ProtocolError.WireFormatError(
+                "X3DH initial fingerprint $initiatorFp does not match " +
+                "bound mailbox owner ${oldContact.contactFingerprint} — refusing reset",
+            )
+        }
+
+        val mySpkSecret = spkSecret
+            ?: throw IllegalStateException("not registered — call register() first")
+        require(envelope.spkId == spkKeyId) { "unknown SPK id: ${envelope.spkId}" }
+        val opkSecret = envelope.opkId?.let {
+            opkSecretByKeyId[it]
+                ?: throw IllegalStateException("unknown OPK id: $it")
+        }
+
+        val sk = X3dh.respond(
+            X3dh.ResponderInput(
+                initiatorIdentityKeyEd25519 = ikA,
+                initiatorEphemeralPublicKey = ekA,
+                responderIdentity = identity,
+                signedPreKeySecret = mySpkSecret,
+                oneTimePreKeySecret = opkSecret,
+            )
+        )
+
+        // OPK forward secrecy: wipe + remove the consumed OPK from
+        // local + persisted state. Matches the original respond path.
+        if (envelope.opkId != null) {
+            val secret = opkSecretByKeyId.remove(envelope.opkId)
+            secret?.wipe()
+            persistence.deleteOneTimePreKey(envelope.opkId)
+        }
+
+        val ad = X3dh.associatedDataFor(ikA, identity)
+        val newSession = Session.fromResponder(
+            sk = sk,
+            bobSignedPreKeyPair = X25519KeyPair(spkPublic!!, mySpkSecret),
+            associatedData = ad,
+        )
+
+        val plaintextBytes = newSession.decrypt(
+            headerBytes = Base64Std.decode(envelope.header),
+            ciphertext = Base64Std.decode(envelope.ciphertext),
+        )
+        val payload = KhordJson.decodeFromString(
+            InnerPayload.serializer(),
+            plaintextBytes.decodeToString(),
+        )
+        val replyInfo = payload.replyInfo
+            ?: throw ProtocolError.WireFormatError(
+                "X3DH initial from $initiatorFp missing reply_info on reset path",
+            )
+        require(replyInfo.fingerprint == initiatorFp) {
+            "reply_info.fingerprint ${replyInfo.fingerprint} != envelope.ik_a hash $initiatorFp"
+        }
+        val text = decodeInnerPayloadText(payload)
+
+        // Update outbound coordinates from the new reply_info — the
+        // counterparty almost certainly minted a fresh inbound mailbox
+        // on their side as part of the recovery flow, so the old
+        // outboundMailboxId on `oldContact` is stale.
+        val updatedQr = QrPayload(
+            identityKey = envelope.ikA,
+            fingerprint = initiatorFp,
+            keyServer = replyInfo.keyServer,
+            relayServer = replyInfo.relayServer,
+            relayMailbox = replyInfo.mailbox,
+        )
+        contactsByFingerprint[initiatorFp] =
+            ContactInfo(updatedQr, replyInfo.displayName)
+        persistence.saveContact(updatedQr, replyInfo.displayName)
+
+        val newContact = ContactSession(
+            contactIdentityKey = ikA,
+            contactFingerprint = initiatorFp,
+            outboundMailboxId = replyInfo.mailbox,
+            outboundRelayServer = replyInfo.relayServer,
+            // OUR mailbox + bearer stay the same — we still own this
+            // mailbox; only the counterparty's state was lost.
+            inboundMailboxId = oldContact.inboundMailboxId,
+            inboundBearerToken = oldContact.inboundBearerToken,
+            session = newSession,
+            lastFetchedSequence = oldContact.lastFetchedSequence,
+        )
+        // Save the marker BEFORE the decrypted text so the chat order
+        // reads naturally: ... old messages ... [reset marker] ...
+        // new first message ...
+        saveSessionResetMarker(initiatorFp)
+        persistence.saveMessage(
+            contactFingerprint = initiatorFp,
+            direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+            body = text,
+            timestamp = payload.timestamp,
+        )
+        persistSession(newContact)
+        return newContact to text
+    }
+
     private fun identityFingerprint(ed25519Pub: ByteArray): String =
         com.ionspin.kotlin.crypto.hash.Hash
             .sha256(ed25519Pub.toUByteArray()).toByteArray()
@@ -1262,6 +1476,21 @@ class Messaging internal constructor(
         sessionsByInboundMailbox[mailboxId]
 
     companion object {
+        /**
+         * Body inserted into the local message history when an inbound
+         * X3DH initial forces a session reset (seed-phrase recovery or
+         * app reinstall on the counterparty's side). Surfaced as a
+         * regular RECEIVED message so it shows up inline in the chat
+         * — see [saveSessionResetMarker]. Stable string so chat-layer
+         * code can pattern-match the prefix to apply special styling
+         * later without a schema migration.
+         */
+        const val SESSION_RESET_MARKER_BODY =
+            "🔄 Session reset — the other party may have re-installed " +
+            "Khord or recovered from a seed phrase. Earlier messages " +
+            "stay in this chat but cannot be replied to under the old " +
+            "session."
+
         /**
          * Public constructor — fresh in-memory orchestrator (no persistence).
          * Callers that want durable state should use the internal

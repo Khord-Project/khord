@@ -14,6 +14,8 @@ object Routes {
     const val SERVER_SETUP = "server-setup"
     const val SEED_DISPLAY = "seed/display"
     const val SEED_CONFIRM = "seed/confirm"
+    /** Seed-phrase recovery entry — see ADR 025. */
+    const val SEED_RECOVERY = "seed/recovery"
     const val REGISTRATION = "register"
     const val CONTACTS = "contacts"
     const val ADD_CONTACT = "contacts/add"
