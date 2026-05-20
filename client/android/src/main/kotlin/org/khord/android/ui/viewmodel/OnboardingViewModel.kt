@@ -186,6 +186,9 @@ class OnboardingViewModel : ViewModel() {
         }
         viewModelScope.launch(Dispatchers.IO) {
             _status.value = Status.Registering
+            org.khord.shared.diagnostic.DiagnosticLog.log(
+                "Khord", "Onboarding: register() started",
+            )
             try {
                 org.khord.shared.crypto.Crypto.ensureInitialized()
                 val canonical = SeedPhrase.toCanonicalString(phrase)
@@ -199,12 +202,29 @@ class OnboardingViewModel : ViewModel() {
                     displayName = displayName,
                 )
                 AppContainer.messaging = messaging
+                org.khord.shared.diagnostic.DiagnosticLog.log(
+                    "Khord",
+                    "Onboarding: identity created on disk (fp=" +
+                        "${identity.fingerprint.take(8)}…); calling " +
+                        "Messaging.register() now",
+                )
                 messaging.register(opkBatchSize = 50)
 
                 // Forget the phrase from memory — the user has it on paper.
                 currentPhrase = null
+                org.khord.shared.diagnostic.DiagnosticLog.log(
+                    "Khord",
+                    "Onboarding: register() complete, identity persisted, " +
+                        "Status.Done dispatched (caller LaunchedEffect will " +
+                        "navigate to ContactList)",
+                )
                 _status.value = Status.Done
             } catch (e: Throwable) {
+                org.khord.shared.diagnostic.DiagnosticLog.log(
+                    "Khord",
+                    "Onboarding: register() failed " +
+                        "(${e::class.simpleName}: ${e.message})",
+                )
                 _status.value = Status.Failed(
                     e.message ?: e::class.simpleName ?: "register failed",
                     cause = e,
