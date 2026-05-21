@@ -15,6 +15,8 @@ Khord is a proof of concept under active development. Priorities shift based on 
 - [x] Real-time WebSocket push notifications
 - [x] Message timestamps and date separators
 - [x] Delete conversation (local, per-contact)
+- [x] Contact acceptance gate — recipients approve new contacts before they appear in the main list
+- [x] Dead contact detection — graceful handling when a contact's identity no longer exists
 
 ### Identity & Security
 - [x] Key-as-identity (Ed25519) — no accounts, no phone numbers, no email
@@ -53,10 +55,8 @@ Khord is a proof of concept under active development. Priorities shift based on 
 
 These are the priorities for the next development cycle, driven by tester feedback.
 
-- [ ] **Contact acceptance gate** — recipients must approve new contacts before messages are delivered
 - [ ] **F-Droid listing** — metadata, reproducible builds, submission
 - [ ] **One-time secret link sharing** — share contact info through a self-destructing encrypted link
-- [ ] **Dead contact detection** — graceful handling when a contact's identity no longer exists
 - [ ] **Xiaomi / MIUI reliability** — SharedPreferences passphrase backup for devices with unreliable Keystore
 
 ---

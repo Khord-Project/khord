@@ -9,8 +9,26 @@ name: CI
 on:
   push:
     branches: [main]
+    # Skip the full build pipeline when a push touches ONLY docs /
+    # text-only assets. `paths-ignore` is whole-set: if ANY changed
+    # file is outside this list, all jobs run normally. The release
+    # workflow (.github/workflows/release.yml) is unaffected — it
+    # triggers on tag pushes, not branch pushes, and rebuilds
+    # unconditionally by design.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'DCO'
+      - 'assets/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'DCO'
+      - 'assets/**'
 
 # Concurrency: cancel any in-flight run for the same ref when a new
 # push lands. Saves CI minutes on rapid-fire pushes; release tag
