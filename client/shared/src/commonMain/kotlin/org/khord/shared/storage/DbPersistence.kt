@@ -120,7 +120,11 @@ internal class DbPersistence(
 
     // ── Contacts ────────────────────────────────────────────────────────────
 
-    override suspend fun saveContact(qr: QrPayload, displayName: String) {
+    override suspend fun saveContact(
+        qr: QrPayload,
+        displayName: String,
+        status: ContactStatus,
+    ) {
         db.contactQueries.upsertContact(
             fingerprint = qr.fingerprint,
             ed25519_public = identityKeyBase64ToBytes(qr.identityKey),
@@ -129,6 +133,7 @@ internal class DbPersistence(
             contact_mailbox = qr.relayMailbox,
             stored_at = now(),
             display_name = displayName,
+            status = status.wireValue(),
         )
     }
 
@@ -139,6 +144,7 @@ internal class DbPersistence(
             qr = rowToQr(row.fingerprint, row.ed25519_public, row.key_server_url,
                          row.relay_server_url, row.contact_mailbox),
             displayName = row.display_name,
+            status = ContactStatus.fromWire(row.status),
         )
     }
 
@@ -148,11 +154,26 @@ internal class DbPersistence(
                 qr = rowToQr(it.fingerprint, it.ed25519_public, it.key_server_url,
                              it.relay_server_url, it.contact_mailbox),
                 displayName = it.display_name,
+                status = ContactStatus.fromWire(it.status),
+            )
+        }
+
+    override suspend fun loadPendingContacts(): List<ContactInfo> =
+        db.contactQueries.selectPendingContacts().executeAsList().map {
+            ContactInfo(
+                qr = rowToQr(it.fingerprint, it.ed25519_public, it.key_server_url,
+                             it.relay_server_url, it.contact_mailbox),
+                displayName = it.display_name,
+                status = ContactStatus.fromWire(it.status),
             )
         }
 
     override suspend fun updateContactDisplayName(fingerprint: String, displayName: String) {
         db.contactQueries.updateContactDisplayName(displayName, fingerprint)
+    }
+
+    override suspend fun setContactStatus(fingerprint: String, status: ContactStatus) {
+        db.contactQueries.setContactStatus(status.wireValue(), fingerprint)
     }
 
     override suspend fun deleteContact(fingerprint: String) {

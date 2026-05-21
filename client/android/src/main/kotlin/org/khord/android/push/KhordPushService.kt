@@ -181,6 +181,18 @@ class KhordPushService : Service() {
             AppContainer.recordReceiveSuccess(contactFingerprint)
             if (plaintexts.isEmpty()) return@launch
 
+            // Acceptance gate: messages from PENDING contacts are
+            // received and stored (so they show up the moment the
+            // user accepts them) but we DON'T surface a notification
+            // banner. The user discovers requests by opening the app
+            // and seeing the "Requests" entry on the contact list.
+            // Anyone could fire X3DH initials at our QR-published
+            // mailboxes; we don't want strangers spamming our
+            // notification shade.
+            if (!messaging.isContactAccepted(contactFingerprint)) {
+                return@launch
+            }
+
             val displayName = messaging.contactDisplayName(contactFingerprint)
                 ?: shortFp(contactFingerprint)
             val preview = plaintexts.last() // latest message

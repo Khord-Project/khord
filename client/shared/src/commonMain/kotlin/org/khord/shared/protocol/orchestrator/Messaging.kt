@@ -310,9 +310,69 @@ class Messaging internal constructor(
     suspend fun storeContact(contactQr: QrPayload) {
         checkAlive()
         val existing = contactsByFingerprint[contactQr.fingerprint]
-        val info = ContactInfo(qr = contactQr, displayName = existing?.displayName ?: "")
+        // User-initiated → always ACCEPTED. If the contact already
+        // existed as PENDING (we got their X3DH initial before they
+        // shared their QR with us out-of-band), this storeContact
+        // call effectively accepts them.
+        val info = ContactInfo(
+            qr = contactQr,
+            displayName = existing?.displayName ?: "",
+            status = org.khord.shared.storage.ContactStatus.ACCEPTED,
+        )
         contactsByFingerprint[contactQr.fingerprint] = info
-        persistence.saveContact(contactQr, info.displayName)
+        persistence.saveContact(contactQr, info.displayName, info.status)
+    }
+
+    // ── Acceptance gate ─────────────────────────────────────────────────────
+    //
+    // See ROADMAP "Contact acceptance gate" + the receiveInitialBlobInternal /
+    // applyX3dhInitialReset paths that mint PENDING contacts.
+
+    /**
+     * One pending contact's user-facing surface — fingerprint + display
+     * name. The chat-screen layer composes message history on top.
+     */
+    data class PendingContact(
+        val fingerprint: String,
+        val displayName: String,
+    )
+
+    /**
+     * Contacts whose first X3DH initial we received but the local user
+     * hasn't accepted yet. Source-of-truth is the in-memory
+     * [contactsByFingerprint] map (mirrored to persistence on every
+     * write). Empty list is the normal case.
+     */
+    fun pendingContacts(): List<PendingContact> {
+        checkAlive()
+        return contactsByFingerprint.values
+            .filter { it.status == org.khord.shared.storage.ContactStatus.PENDING }
+            .map { PendingContact(it.qr.fingerprint, it.displayName) }
+    }
+
+    /** True iff the fingerprint is known AND its status is ACCEPTED. */
+    fun isContactAccepted(fingerprint: String): Boolean =
+        contactsByFingerprint[fingerprint]?.status ==
+            org.khord.shared.storage.ContactStatus.ACCEPTED
+
+    /**
+     * Promote a pending contact to accepted. No-op if the fingerprint
+     * is unknown OR already accepted. After this returns the contact
+     * appears in the regular UI list and the push service stops
+     * suppressing their notification banners.
+     *
+     * "Decline" is just [deleteContact] — same effect locally, no
+     * notification to the counterparty either way.
+     */
+    suspend fun acceptContact(fingerprint: String) {
+        checkAlive()
+        val info = contactsByFingerprint[fingerprint] ?: return
+        if (info.status == org.khord.shared.storage.ContactStatus.ACCEPTED) return
+        contactsByFingerprint[fingerprint] =
+            info.copy(status = org.khord.shared.storage.ContactStatus.ACCEPTED)
+        persistence.setContactStatus(
+            fingerprint, org.khord.shared.storage.ContactStatus.ACCEPTED,
+        )
     }
 
     /** Update my own display name (persisted; used in subsequent reply_info). */
@@ -571,9 +631,17 @@ class Messaging internal constructor(
             relayServer = replyInfo.relayServer,
             relayMailbox = replyInfo.mailbox,
         )
+        // Acceptance gate: a new fingerprint reaching us via X3DH
+        // initial defaults to PENDING. If we ALREADY know this
+        // fingerprint (e.g. seed-phrase recovery re-binding through
+        // Case B, or the user manually stored their QR earlier),
+        // preserve the existing status — don't downgrade an accepted
+        // contact to pending on session re-bind.
+        val existingStatus = contactsByFingerprint[initiatorFp]?.status
+            ?: org.khord.shared.storage.ContactStatus.PENDING
         contactsByFingerprint[initiatorFp] =
-            ContactInfo(autoCreatedQr, replyInfo.displayName)
-        persistence.saveContact(autoCreatedQr, replyInfo.displayName)
+            ContactInfo(autoCreatedQr, replyInfo.displayName, existingStatus)
+        persistence.saveContact(autoCreatedQr, replyInfo.displayName, existingStatus)
 
         val contactSession = ContactSession(
             contactIdentityKey = ikA,
@@ -1347,9 +1415,16 @@ class Messaging internal constructor(
             relayServer = replyInfo.relayServer,
             relayMailbox = replyInfo.mailbox,
         )
+        // Preserve acceptance status across the reset. The reset path
+        // only fires for an already-known contact (we just verified
+        // the fingerprint matches `oldContact.contactFingerprint`),
+        // so the status MUST already exist — but fall back to PENDING
+        // defensively if the in-memory map is somehow out of sync.
+        val existingStatus = contactsByFingerprint[initiatorFp]?.status
+            ?: org.khord.shared.storage.ContactStatus.PENDING
         contactsByFingerprint[initiatorFp] =
-            ContactInfo(updatedQr, replyInfo.displayName)
-        persistence.saveContact(updatedQr, replyInfo.displayName)
+            ContactInfo(updatedQr, replyInfo.displayName, existingStatus)
+        persistence.saveContact(updatedQr, replyInfo.displayName, existingStatus)
 
         val newContact = ContactSession(
             contactIdentityKey = ikA,

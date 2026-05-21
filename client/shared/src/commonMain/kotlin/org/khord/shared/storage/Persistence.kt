@@ -56,10 +56,34 @@ internal interface Persistence {
 
     // ── Contacts ────────────────────────────────────────────────────────────
 
-    suspend fun saveContact(qr: QrPayload, displayName: String = "")
+    /**
+     * Upsert a contact row. New contacts default to
+     * [ContactStatus.ACCEPTED] because the orchestrator's primary
+     * caller is [Messaging.storeContact] which represents
+     * user-initiated contacts. The X3DH-initial receive path passes
+     * [ContactStatus.PENDING] explicitly. Existing rows keep their
+     * status on UPSERT unless the caller explicitly overrides it via
+     * [setContactStatus].
+     *
+     * Implementation detail for INSERT OR REPLACE-style upserts: the
+     * value passed here REPLACES the on-disk status. Callers who want
+     * to preserve an existing status should read it first.
+     */
+    suspend fun saveContact(
+        qr: QrPayload,
+        displayName: String = "",
+        status: ContactStatus = ContactStatus.ACCEPTED,
+    )
     suspend fun loadContact(fingerprint: String): ContactInfo?
     suspend fun loadAllContacts(): List<ContactInfo>
+
+    /** Contacts whose first X3DH initial hasn't yet been approved by the local user. */
+    suspend fun loadPendingContacts(): List<ContactInfo>
+
     suspend fun updateContactDisplayName(fingerprint: String, displayName: String)
+
+    /** Flip an existing contact's acceptance status. No-op if the fingerprint is unknown. */
+    suspend fun setContactStatus(fingerprint: String, status: ContactStatus)
 
     /**
      * Remove a contact and every record that depends on it: the
@@ -197,14 +221,41 @@ internal data class IdentityRecord(
 )
 
 /**
- * Stored contact = wire QR + a learned display name. Display name lives
- * outside the QR (the QR JSON is unchanged) because we learn names from
- * the encrypted `reply_info` field, not from the public QR code.
+ * Stored contact = wire QR + a learned display name + acceptance
+ * status. Display name lives outside the QR (the QR JSON is unchanged)
+ * because we learn names from the encrypted `reply_info` field, not
+ * from the public QR code. Status drives the contact-acceptance gate:
+ *
+ *   - [ContactStatus.ACCEPTED] — contact you initiated (scanned QR /
+ *     pasted link), or one whose first message you've already
+ *     approved. Shown in the main contact list.
+ *   - [ContactStatus.PENDING] — someone who sent you an X3DH initial
+ *     without prior approval. Messages received and stored, but the
+ *     contact only surfaces in the "Requests" UI; the push service
+ *     suppresses notification banners until acceptance.
  */
 internal data class ContactInfo(
     val qr: QrPayload,
     val displayName: String,
+    val status: ContactStatus = ContactStatus.ACCEPTED,
 )
+
+internal enum class ContactStatus {
+    ACCEPTED,
+    PENDING;
+
+    fun wireValue(): String = when (this) {
+        ACCEPTED -> "accepted"
+        PENDING -> "pending"
+    }
+
+    companion object {
+        fun fromWire(s: String): ContactStatus = when (s) {
+            "pending" -> PENDING
+            else -> ACCEPTED   // accept anything we don't recognise — safer than wedging
+        }
+    }
+}
 
 internal data class SignedPreKeyRecord(
     val keyId: Int,

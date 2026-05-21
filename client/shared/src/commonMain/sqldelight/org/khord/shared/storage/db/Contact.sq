@@ -9,14 +9,26 @@ CREATE TABLE contact (
     -- Empty string until the first message in either direction lands and
     -- carries reply_info; QR scans alone don't set this (the QR doesn't
     -- include display name to keep the QR wire format unchanged).
-    display_name       TEXT NOT NULL DEFAULT ''
+    display_name       TEXT NOT NULL DEFAULT '',
+    -- Acceptance gate (see ROADMAP "Contact acceptance gate"):
+    --   'accepted' — contact you initiated (scanned QR / pasted link), or
+    --                one whose first message you've already approved. Shown
+    --                in the main contact list.
+    --   'pending'  — someone you don't yet know who sent you an X3DH
+    --                initial. Their messages are received and stored, but
+    --                they don't appear in the main list and the push
+    --                service suppresses their banners. The user explicitly
+    --                Accept-s or Decline-s them from a "Requests" screen.
+    -- Existing rows on pre-schema-4 databases default to 'accepted' via
+    -- the 3.sqm migration.
+    status             TEXT NOT NULL DEFAULT 'accepted'
 );
 
 upsertContact:
 INSERT OR REPLACE INTO contact(
     fingerprint, ed25519_public, key_server_url, relay_server_url,
-    contact_mailbox, stored_at, display_name
-) VALUES (?, ?, ?, ?, ?, ?, ?);
+    contact_mailbox, stored_at, display_name, status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 selectContactByFingerprint:
 SELECT * FROM contact WHERE fingerprint = ?;
@@ -24,8 +36,14 @@ SELECT * FROM contact WHERE fingerprint = ?;
 selectAllContacts:
 SELECT * FROM contact;
 
+selectPendingContacts:
+SELECT * FROM contact WHERE status = 'pending';
+
 updateContactDisplayName:
 UPDATE contact SET display_name = ? WHERE fingerprint = ?;
+
+setContactStatus:
+UPDATE contact SET status = ? WHERE fingerprint = ?;
 
 deleteContact:
 DELETE FROM contact WHERE fingerprint = ?;

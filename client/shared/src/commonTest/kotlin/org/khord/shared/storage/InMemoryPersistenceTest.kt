@@ -121,6 +121,49 @@ class InMemoryPersistenceTest {
     }
 
     @Test
+    fun saveContact_defaults_status_to_accepted_and_set_promotes_pending() = runTest {
+        val p = InMemoryPersistence()
+        val fp = "a".repeat(64)
+        val qr = QrPayload(
+            identityKey = "AAAA",
+            fingerprint = fp,
+            keyServer = "x",
+            relayServer = "y",
+            relayMailbox = "m" + "0".repeat(21),
+        )
+        p.saveContact(qr, "Alice") // default ACCEPTED
+        assertEquals(ContactStatus.ACCEPTED, p.loadContact(fp)!!.status)
+        assertEquals(0, p.loadPendingContacts().size)
+
+        p.setContactStatus(fp, ContactStatus.PENDING)
+        assertEquals(ContactStatus.PENDING, p.loadContact(fp)!!.status)
+        assertEquals(1, p.loadPendingContacts().size)
+
+        p.setContactStatus(fp, ContactStatus.ACCEPTED)
+        assertEquals(0, p.loadPendingContacts().size)
+    }
+
+    @Test
+    fun loadPendingContacts_returns_only_pending_rows() = runTest {
+        val p = InMemoryPersistence()
+        val aliceFp = "a".repeat(64)
+        val bobFp = "b".repeat(64)
+        val carolFp = "c".repeat(64)
+        fun qr(fp: String) = QrPayload(
+            identityKey = "AAAA", fingerprint = fp,
+            keyServer = "x", relayServer = "y",
+            relayMailbox = "m" + fp.take(21),
+        )
+        p.saveContact(qr(aliceFp), "Alice", ContactStatus.ACCEPTED)
+        p.saveContact(qr(bobFp), "Bob", ContactStatus.PENDING)
+        p.saveContact(qr(carolFp), "Carol", ContactStatus.PENDING)
+
+        val pending = p.loadPendingContacts().map { it.qr.fingerprint }.toSet()
+        assertEquals(setOf(bobFp, carolFp), pending)
+        assertEquals(3, p.loadAllContacts().size)
+    }
+
+    @Test
     fun pending_mailbox_lifecycle() = runTest {
         val p = InMemoryPersistence()
         p.savePendingMailbox("mid-1", "tok-1")

@@ -52,6 +52,13 @@ class ContactListViewModel : ViewModel() {
         val rows: List<Row> = emptyList(),
         val refreshing: Boolean = false,
         val error: String? = null,
+        /**
+         * Number of contacts whose first X3DH initial we received but
+         * the user hasn't accepted yet. ContactListScreen surfaces
+         * this as a "X new contact request(s)" banner above the chat
+         * list and routes the tap to PendingContactsScreen.
+         */
+        val pendingContactCount: Int = 0,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -151,7 +158,13 @@ class ContactListViewModel : ViewModel() {
                         }
                     }
                     val failures = AppContainer.contactReceiveFailures.value
-                    val contactRows = messaging.contacts().map { contact ->
+                    // Acceptance gate: filter out pending contacts from
+                    // the main list — they live in PendingContactsScreen
+                    // until the user explicitly accepts. Push service
+                    // mirrors this in handlePush (no banner for pending).
+                    val contactRows = messaging.contacts()
+                        .filter { messaging.isContactAccepted(it.contactFingerprint) }
+                        .map { contact ->
                         val history = messaging.messageHistory(contact.contactFingerprint)
                         val last = history.lastOrNull()
                         val name = messaging.contactDisplayName(contact.contactFingerprint)
@@ -200,7 +213,14 @@ class ContactListViewModel : ViewModel() {
                         compareByDescending<Row> { it.lastTimestamp != null }
                             .thenByDescending { it.lastTimestamp ?: "" },
                     )
-                    _state.update { it.copy(rows = sorted, refreshing = false) }
+                    val pendingCount = messaging.pendingContacts().size
+                    _state.update {
+                        it.copy(
+                            rows = sorted,
+                            refreshing = false,
+                            pendingContactCount = pendingCount,
+                        )
+                    }
                 } catch (e: Throwable) {
                     _state.update {
                         it.copy(refreshing = false, error = e.message ?: e::class.simpleName)
