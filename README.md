@@ -122,6 +122,7 @@ AGPL ensures that anyone running a modified version of the server must publish t
 
 - **Website:** https://khord.org
 - **Repository:** https://github.com/Khord-Project/khord
+- **Roadmap:** [ROADMAP.md](ROADMAP.md)
 - **Protocol Specification:** [docs/PROTOCOL.md](docs/PROTOCOL.md)
 - **Architecture Decisions:** [docs/decisions/](docs/decisions/)
 - **Deferred Decisions:** [docs/DEFERRED.md](docs/DEFERRED.md)
