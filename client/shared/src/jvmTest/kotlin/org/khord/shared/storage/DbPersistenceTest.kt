@@ -165,6 +165,36 @@ class DbPersistenceTest {
     }
 
     @Test
+    fun contact_status_round_trip_and_load_pending() = runTest {
+        val p = openTestDb()
+        try {
+            val aliceFp = "a".repeat(64)
+            val bobFp = "b".repeat(64)
+            p.saveContact(QrPayload(
+                identityKey = "AAAA", fingerprint = aliceFp,
+                keyServer = "https://ks", relayServer = "https://rs",
+                relayMailbox = "alice-mailbox-id-22-aaaa",
+            ), "Alice", ContactStatus.ACCEPTED)
+            p.saveContact(QrPayload(
+                identityKey = "BBBB", fingerprint = bobFp,
+                keyServer = "https://ks", relayServer = "https://rs",
+                relayMailbox = "bob-mailbox-id-22-bbbbbb",
+            ), "Bob", ContactStatus.PENDING)
+
+            assertEquals(ContactStatus.ACCEPTED, p.loadContact(aliceFp)!!.status)
+            assertEquals(ContactStatus.PENDING, p.loadContact(bobFp)!!.status)
+            assertEquals(listOf(bobFp), p.loadPendingContacts().map { it.qr.fingerprint })
+
+            // Promote Bob → accepted.
+            p.setContactStatus(bobFp, ContactStatus.ACCEPTED)
+            assertEquals(ContactStatus.ACCEPTED, p.loadContact(bobFp)!!.status)
+            assertEquals(0, p.loadPendingContacts().size)
+        } finally {
+            p.close()
+        }
+    }
+
+    @Test
     fun deleteContact_cascades_to_session_and_messages_via_explicit_transaction() = runTest {
         val p = openTestDb()
         try {

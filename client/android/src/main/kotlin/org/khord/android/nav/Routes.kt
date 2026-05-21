@@ -19,6 +19,8 @@ object Routes {
     const val REGISTRATION = "register"
     const val CONTACTS = "contacts"
     const val ADD_CONTACT = "contacts/add"
+    /** Contact acceptance gate — see Messaging.pendingContacts. */
+    const val PENDING_CONTACTS = "contacts/pending"
     const val SETTINGS = "settings"
 
     // Chat carries the contact's fingerprint so the screen can pick the

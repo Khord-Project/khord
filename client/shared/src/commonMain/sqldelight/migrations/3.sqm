@@ -1,0 +1,7 @@
+-- Migration from schema version 3 to 4.
+-- Adds contact.status to support the contact-acceptance gate. Existing
+-- rows default to 'accepted' so upgrading users don't lose access to
+-- contacts who were implicitly accepted by virtue of being on
+-- pre-feature builds. New X3DH initials arriving on schema-4+ devices
+-- are created as 'pending' until the user explicitly accepts them.
+ALTER TABLE contact ADD COLUMN status TEXT NOT NULL DEFAULT 'accepted';

@@ -27,6 +27,7 @@ import org.khord.android.ui.screens.ContactListScreen
 import org.khord.android.ui.screens.CreateGroupScreen
 import org.khord.android.ui.screens.GroupChatScreen
 import org.khord.android.ui.screens.GroupInfoScreen
+import org.khord.android.ui.screens.PendingContactsScreen
 import org.khord.android.ui.screens.RegistrationScreen
 import org.khord.android.ui.screens.SeedConfirmScreen
 import org.khord.android.ui.screens.SeedDisplayScreen
@@ -123,6 +124,7 @@ private fun KhordNavGraph(
         composable(Routes.REGISTRATION) { RegistrationScreen(nav) }
         composable(Routes.CONTACTS) { ContactListScreen(nav) }
         composable(Routes.ADD_CONTACT) { AddContactScreen(nav) }
+        composable(Routes.PENDING_CONTACTS) { PendingContactsScreen(nav) }
         composable(Routes.SETTINGS) { SettingsScreen(nav) }
         composable(
             route = Routes.CHAT_PATTERN,

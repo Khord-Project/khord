@@ -190,6 +190,17 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
             val update by AppContainer.availableUpdate.collectAsStateWithLifecycle()
             update?.let { UpdateBanner(it) }
 
+            // Pending-contacts banner — appears whenever someone has
+            // sent us an X3DH initial that we haven't accepted yet.
+            // Tap routes to PendingContactsScreen for Accept / Decline.
+            // See ROADMAP "Contact acceptance gate".
+            if (state.pendingContactCount > 0) {
+                PendingContactsBanner(
+                    count = state.pendingContactCount,
+                    onClick = { nav.navigate(Routes.PENDING_CONTACTS) },
+                )
+            }
+
             Box(modifier = Modifier.weight(1f).fillMaxSize()) {
                 if (state.rows.isEmpty()) {
                     EmptyState(error = state.error)
@@ -268,6 +279,43 @@ private fun UpdateBanner(info: UpdateInfo) {
         Button(
             onClick = { uriHandler.openUri(info.htmlUrl) },
         ) { Text("Update") }
+    }
+}
+
+/**
+ * Subtle banner that surfaces above the chat list when pending
+ * contacts exist. Tap routes to PendingContactsScreen for the
+ * accept/decline flow. See ROADMAP "Contact acceptance gate".
+ */
+@Composable
+private fun PendingContactsBanner(count: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.primary,
+                shape = RoundedCornerShape(8.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (count == 1) "1 new contact request"
+                   else "$count new contact requests",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            "Review →",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 

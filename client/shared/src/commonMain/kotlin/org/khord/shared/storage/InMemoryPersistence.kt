@@ -53,13 +53,22 @@ internal class InMemoryPersistence : Persistence {
         opks.clear()
     }
 
-    override suspend fun saveContact(qr: QrPayload, displayName: String) {
-        contacts[qr.fingerprint] = ContactInfo(qr, displayName)
+    override suspend fun saveContact(
+        qr: QrPayload,
+        displayName: String,
+        status: ContactStatus,
+    ) {
+        contacts[qr.fingerprint] = ContactInfo(qr, displayName, status)
     }
     override suspend fun loadContact(fingerprint: String): ContactInfo? = contacts[fingerprint]
     override suspend fun loadAllContacts(): List<ContactInfo> = contacts.values.toList()
+    override suspend fun loadPendingContacts(): List<ContactInfo> =
+        contacts.values.filter { it.status == ContactStatus.PENDING }
     override suspend fun updateContactDisplayName(fingerprint: String, displayName: String) {
         contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(displayName = displayName) }
+    }
+    override suspend fun setContactStatus(fingerprint: String, status: ContactStatus) {
+        contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(status = status) }
     }
 
     override suspend fun deleteContact(fingerprint: String) {
