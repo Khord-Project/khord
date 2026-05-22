@@ -95,7 +95,26 @@ fun PendingContactsScreen(
                     items(state.rows, key = { it.fingerprint }) { row ->
                         PendingContactRow(
                             row = row,
-                            onAccept = { vm.accept(row.fingerprint) },
+                            onAccept = {
+                                // After acceptance, drop the user
+                                // straight into the chat — they
+                                // just decided they want to talk
+                                // to this person. popUpTo this
+                                // screen with inclusive so back
+                                // from chat returns to the contact
+                                // list, not to a now-empty (or
+                                // smaller) pending list.
+                                vm.accept(row.fingerprint) {
+                                    nav.navigate(
+                                        org.khord.android.nav.Routes.chat(row.fingerprint),
+                                    ) {
+                                        popUpTo(
+                                            org.khord.android.nav.Routes.PENDING_CONTACTS,
+                                        ) { inclusive = true }
+                                        launchSingleTop = true
+                                    }
+                                }
+                            },
                             onDecline = { vm.decline(row.fingerprint) },
                         )
                         HorizontalDivider()
