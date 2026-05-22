@@ -181,6 +181,13 @@ class KhordPushService : Service() {
             AppContainer.recordReceiveSuccess(contactFingerprint)
             if (plaintexts.isEmpty()) return@launch
 
+            // Nudge any open ChatViewModel for this contact to reload
+            // its history flow. ChatViewModel suppresses its own 5 s
+            // poll when push is alive, so without this nudge a
+            // foregrounded chat wouldn't see push-delivered messages
+            // until the user backed out and came back.
+            AppContainer.notifyIncomingMessage(contactFingerprint)
+
             // Acceptance gate: messages from PENDING contacts are
             // received and stored (so they show up the moment the
             // user accepts them) but we DON'T surface a notification
@@ -190,6 +197,13 @@ class KhordPushService : Service() {
             // mailboxes; we don't want strangers spamming our
             // notification shade.
             if (!messaging.isContactAccepted(contactFingerprint)) {
+                return@launch
+            }
+            // Foregrounded-chat suppression: if the user is currently
+            // looking at this contact's chat, the new message is
+            // already rendered (via incomingMessageTick); a banner
+            // would just flash and distract.
+            if (AppContainer.openChatFingerprint == contactFingerprint) {
                 return@launch
             }
 

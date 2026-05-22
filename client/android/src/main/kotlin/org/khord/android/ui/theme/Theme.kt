@@ -31,6 +31,7 @@ enum class KhordThemeChoice(val displayName: String) {
     TEAL("Teal"),
     FOREST("Forest"),
     MINIMAL("Minimal"),
+    MATRIX("Matrix"),
 }
 
 /**
@@ -43,6 +44,7 @@ val KhordThemeChoice.swatchColor: Color
         KhordThemeChoice.TEAL -> Color(0xFF1A535C)
         KhordThemeChoice.FOREST -> Color(0xFF2D4739)
         KhordThemeChoice.MINIMAL -> Color(0xFF1C1C1E)
+        KhordThemeChoice.MATRIX -> Color(0xFF00FF41)
     }
 
 /**
@@ -75,6 +77,10 @@ internal fun palette(choice: KhordThemeChoice, dark: Boolean): Pair<ColorScheme,
         KhordThemeChoice.TEAL -> if (dark) tealDark() else tealLight()
         KhordThemeChoice.FOREST -> if (dark) forestDark() else forestLight()
         KhordThemeChoice.MINIMAL -> if (dark) minimalDark() else minimalLight()
+        // Matrix is intentionally dark-only — a "light Matrix" makes
+        // no design sense. Return the dark palette regardless of the
+        // device's day/night setting.
+        KhordThemeChoice.MATRIX -> matrixDark()
     }
 
 // ── Teal ─────────────────────────────────────────────────────────────────────
@@ -225,6 +231,36 @@ private fun minimalDark(): Pair<ColorScheme, KhordChatColors> {
         sentText = Color.White,
         receivedBubble = Color(0xFF2C2C2E),
         receivedText = Color(0xFFE6E1E5),
+    )
+}
+
+// ── Matrix ───────────────────────────────────────────────────────────────────
+// Phosphor-green on black. Terminal aesthetic. Dark-only (a light
+// Matrix would be visually wrong — the whole point is the green-on-
+// black readout look). Primary: matrix green #00FF41. Muted: dimmer
+// green #008F11. Surface: near-black #0D0208.
+
+private fun matrixDark(): Pair<ColorScheme, KhordChatColors> {
+    val primary = Color(0xFF00FF41)
+    val muted = Color(0xFF008F11)
+    val bg = Color(0xFF000000)
+    val surface = Color(0xFF0D0208)
+    return darkColorScheme(
+        primary = primary,
+        onPrimary = bg,
+        secondary = primary,
+        onSecondary = bg,
+        background = bg,
+        onBackground = primary,
+        surface = surface,
+        onSurface = primary,
+        surfaceVariant = Color(0xFF0A1A0E),
+        onSurfaceVariant = muted,
+    ) to KhordChatColors(
+        sentBubble = surface,
+        sentText = primary,
+        receivedBubble = Color(0xFF0A1A0E),
+        receivedText = primary,
     )
 }
 

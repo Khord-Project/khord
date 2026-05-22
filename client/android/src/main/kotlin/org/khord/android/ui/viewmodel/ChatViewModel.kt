@@ -8,6 +8,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -76,7 +79,23 @@ class ChatViewModel(
     private val mutex = Mutex()
     private var pollJob: Job? = null
 
-    init { reloadHistory() }
+    init {
+        reloadHistory()
+        // Listen for push-delivered messages targeted at this
+        // fingerprint. Map → distinctUntilChanged so we only react
+        // when our specific contact's counter ticks; drop(1) skips
+        // the initial value (the reloadHistory() above already
+        // covers the snapshot at construction time). On every tick,
+        // reload the history from persistence — the push service
+        // has already written the new row(s) by the time we observe.
+        viewModelScope.launch {
+            AppContainer.incomingMessageTick
+                .map { it[contactFingerprint] ?: 0L }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { reloadHistory() }
+        }
+    }
 
     fun startPolling() {
         if (pollJob?.isActive == true) return
