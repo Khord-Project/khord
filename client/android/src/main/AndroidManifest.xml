@@ -4,9 +4,18 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- Foreground service for the WebSocket push listener (ADR 022). -->
+    <!--
+         Foreground service for the WebSocket push listener (ADR 022).
+         specialUse, not dataSync: Android 14+ enforces a 6-hour cap on
+         dataSync services and throws ForegroundServiceDidNotStopInTimeException
+         when it fires (see closed-out issues #50 / #52). Khord's push
+         WebSocket is meant to run as long as the user wants notifications;
+         there is no defined FGS type that fits (it's not connectedDevice,
+         not mediaPlayback, not location). specialUse covers exactly this
+         shape, and has no timeout by design.
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -35,7 +44,17 @@
         <service
             android:name=".push.KhordPushService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <!--
+                Android 14+ requires a justification for specialUse FGS.
+                The value here is the answer to "why doesn't a defined
+                type fit?"; the Play Store / sideload reviewer reads it
+                when assessing the manifest.
+            -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains an end-to-end encrypted WebSocket to the Relay Server for real-time message delivery. No defined FGS type fits: dataSync has a 6h timeout that breaks the use case; the WebSocket is not connectedDevice / mediaPlayback / location." />
+        </service>
     </application>
 
 </manifest>

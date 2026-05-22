@@ -1,6 +1,8 @@
 package org.khord.android.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,10 +62,23 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
     val state by vm.state.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     DisposableEffect(Unit) {
         vm.startPolling()
-        onDispose { vm.stopPolling() }
+        // Tell the push service to suppress notification banners
+        // for this contact while we're foregrounded. Also dismiss
+        // any banner that's already sitting in the shade — covers
+        // the "user opened the chat manually (not via the
+        // notification tap)" path. The tap path is auto-cancelled
+        // by the notification builder's setAutoCancel(true).
+        org.khord.android.AppContainer.openChatFingerprint = contactFingerprint
+        androidx.core.app.NotificationManagerCompat.from(context)
+            .cancel(org.khord.android.push.KhordNotifications.notificationIdFor(contactFingerprint))
+        onDispose {
+            org.khord.android.AppContainer.openChatFingerprint = null
+            vm.stopPolling()
+        }
     }
 
     LaunchedEffect(state.messages.size) {
@@ -244,19 +259,49 @@ private fun MessageRow(msg: MessageEntry, senderName: String?) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(msg: MessageEntry) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val chat = LocalKhordChatColors.current
     val bg = if (isSent) chat.sentBubble else chat.receivedBubble
     val fg = if (isSent) chat.sentText else chat.receivedText
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .widthIn(max = 280.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(bg)
+            .combinedClickable(
+                onClick = {},
+                onLongClick = { menuOpen = true },
+            )
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         Text(msg.body, color = fg, style = MaterialTheme.typography.bodyMedium)
+        androidx.compose.material3.DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+        ) {
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text("Copy") },
+                onClick = {
+                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    cm.setPrimaryClip(
+                        android.content.ClipData.newPlainText("Khord message", msg.body),
+                    )
+                    menuOpen = false
+                    // Android 13+ shows its own copy toast; on older
+                    // versions we don't surface one to avoid noise.
+                    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+                        android.widget.Toast.makeText(
+                            context, "Copied", android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                },
+            )
+        }
     }
 }

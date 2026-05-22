@@ -114,8 +114,18 @@ object KhordNotifications {
             .setContentIntent(pi)
             .build()
 
-        // ID = stable hash of fingerprint, biased away from the service id (1).
-        val id = (contactFingerprint.hashCode() and 0x7fffffff).coerceAtLeast(2)
-        return id to notif
+        return notificationIdFor(contactFingerprint) to notif
     }
+
+    /**
+     * Deterministic per-contact notification ID. Stable hash of the
+     * fingerprint, biased away from [SERVICE_NOTIFICATION_ID] (= 1)
+     * so a per-contact banner can never collide with the foreground
+     * service's persistent notification. Exposed so ChatScreen can
+     * cancel the banner when the user opens the chat manually (i.e.
+     * not via the notification tap, which auto-cancels on its own
+     * via setAutoCancel(true)).
+     */
+    fun notificationIdFor(contactFingerprint: String): Int =
+        (contactFingerprint.hashCode() and 0x7fffffff).coerceAtLeast(2)
 }

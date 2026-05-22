@@ -85,19 +85,37 @@ class PendingContactsViewModel : ViewModel() {
      * ContactListViewModel refresh will surface the contact in the
      * regular list, and the push service will start posting
      * notification banners for their messages.
+     *
+     * [onAccepted] is invoked on the Main dispatcher exactly once if
+     * the acceptance call succeeds. The screen uses this to navigate
+     * straight into the newly-accepted contact's chat, since the
+     * user has clearly just decided they want to talk to them.
+     * Default no-op so callers that don't care don't have to pass
+     * a lambda.
      */
-    fun accept(fingerprint: String) {
+    fun accept(fingerprint: String, onAccepted: () -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
+            var success = false
             mutex.withLock {
                 try {
                     val messaging = AppContainer.messaging ?: error("messaging not initialised")
                     messaging.acceptContact(fingerprint)
+                    success = true
                 } catch (e: Throwable) {
                     _state.update { it.copy(error = e.message ?: e::class.simpleName) }
                     return@withLock
                 }
             }
-            refresh()
+            if (success) {
+                // Refresh fires its own coroutine; navigation can run
+                // immediately on Main and tear down the screen — any
+                // pending refresh update lands on a disposed VM and
+                // is harmless.
+                refresh()
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    onAccepted()
+                }
+            }
         }
     }
 

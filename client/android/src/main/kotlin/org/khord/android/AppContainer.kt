@@ -58,6 +58,43 @@ object AppContainer {
     val pushConnected: MutableStateFlow<Set<String>> = MutableStateFlow(emptySet())
 
     /**
+     * Per-contact "new message received" tick. Incremented by the push
+     * service after a successful drain delivers ≥1 new plaintext for
+     * the given fingerprint. ChatViewModel observes the entry for its
+     * own fingerprint and reloads its history on every tick — without
+     * this, push-delivered messages would be persisted but the open
+     * chat wouldn't see them until either:
+     *
+     *   - the user navigates away + back (recreates the ViewModel), or
+     *   - the push WebSocket flaps and the 5 s fallback poll resumes
+     *     (chat polling is suppressed-by-design when push is alive,
+     *     so we'd otherwise wait for that suppression to lift).
+     *
+     * Map-of-counters rather than a Flow<String> stream because each
+     * ChatViewModel only cares about its own fingerprint; treating
+     * each per-contact counter as a distinct StateFlow value gives
+     * clean `distinctUntilChanged` semantics with no replay surface.
+     */
+    val incomingMessageTick: MutableStateFlow<Map<String, Long>> = MutableStateFlow(emptyMap())
+
+    fun notifyIncomingMessage(contactFingerprint: String) {
+        incomingMessageTick.update { current ->
+            current + (contactFingerprint to ((current[contactFingerprint] ?: 0L) + 1L))
+        }
+    }
+
+    /**
+     * Fingerprint of the chat the user currently has open in the
+     * foreground, or null. Set by ChatScreen's DisposableEffect on
+     * entry, cleared on dispose. The push service reads this and
+     * suppresses notification banners for the current chat — a
+     * banner would briefly flash even when the user is staring at
+     * the chat, which is jarring.
+     */
+    @Volatile
+    var openChatFingerprint: String? = null
+
+    /**
      * Per-contact consecutive `receiveMessages()` failure count.
      * Incremented by [recordReceiveFailure] from callers that drive
      * receive (ChatViewModel poll loop, KhordPushService push handler);
