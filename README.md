@@ -96,13 +96,13 @@ See [docs/DEFERRED.md](docs/DEFERRED.md) for the full deferred-decisions list wi
 
 ## What Khord Does NOT Do (Explicit Non-Goals for PoC)
 
-- Group messaging
 - Multi-device sync
 - Media/file attachments
 - Read receipts or typing indicators
 - Voice/video calls
 - Server-facilitated contact discovery
 - Organizational deployment mode
+- **GIFs, sticker packs, custom emoji** — Khord intentionally supports only standard Unicode emoji via the device keyboard. Deliberate choice to keep the app lean and text-focused; the ROADMAP's "Deliberate Exclusions" section captures the full list of "no, by design" choices.
 
 ## Licensing
 
@@ -123,6 +123,7 @@ AGPL ensures that anyone running a modified version of the server must publish t
 - **Website:** https://khord.org
 - **Repository:** https://github.com/Khord-Project/khord
 - **Roadmap:** [ROADMAP.md](ROADMAP.md)
+- **Versioning policy:** [docs/VERSIONING.md](docs/VERSIONING.md)
 - **Protocol Specification:** [docs/PROTOCOL.md](docs/PROTOCOL.md)
 - **Architecture Decisions:** [docs/decisions/](docs/decisions/)
 - **Deferred Decisions:** [docs/DEFERRED.md](docs/DEFERRED.md)
