@@ -52,45 +52,82 @@ class KhordPushService : Service() {
         KhordNotifications.ensureChannel(this)
         val notif = KhordNotifications.foregroundServiceNotification(this)
 
-        // API 34+ requires a foreground service type. dataSync is the
-        // conventional fit for "ongoing data delivery from a network
-        // endpoint" — exactly what this service does.
+        // API 34+ requires a foreground service type. We use specialUse
+        // (not dataSync): dataSync is time-capped at 6 hours on Android
+        // 14+ and the system throws ForegroundServiceDidNotStopInTime
+        // Exception once the cap fires — see closed-out issues #50/#52
+        // reporting that exact stack trace on the OnePlus CPH2581
+        // running Android 16. specialUse has no timeout, which matches
+        // the "stay connected as long as the user wants notifications"
+        // shape of this service. Justification for the choice lives in
+        // the manifest's PROPERTY_SPECIAL_USE_FGS_SUBTYPE attribute.
         //
-        // The try/catch defends against [android.app.ForegroundServiceStart
-        // NotAllowedException] which Android 12+ throws when the system
-        // tries to bring the service back into the foreground from a
-        // non-foreground-eligible state. This happens most commonly when
-        // the OS reaps our process under memory pressure and the service
-        // is then re-created without an active Activity context. OEMs
-        // like OnePlus / OPPO / Realme / Xiaomi are particularly
-        // aggressive about killing background processes, so this path
-        // gets hit on real devices even when our own start-call sites
-        // are all from visible-Activity contexts.
+        // The try/catch defends against two distinct failures:
         //
-        // The exception class only exists on API 31+. Catching plain
-        // [Exception] keeps us API-portable and also covers any other
-        // permission-related failure (e.g. POST_NOTIFICATIONS denied at
-        // an awkward moment). We log via DiagnosticLog so the next bug
-        // report captures the cause, then [stopSelf] — the service dies
-        // silently instead of crashing the process. The next
-        // user-initiated app launch will start the service fresh from
-        // an Activity context that IS foreground-eligible.
+        //   1. [ForegroundServiceStartNotAllowedException] (API 31+) —
+        //      Android refuses the foreground promotion because the
+        //      app isn't in a foreground-eligible state. This is the
+        //      bug from issue #9 — the OS reaps our process under
+        //      memory pressure, then re-creates the service, but the
+        //      recreate doesn't carry the foreground grant.
+        //      Aggressive OEM ROMs (OnePlus / OPPO / Realme / Xiaomi)
+        //      hit this even when our own start sites are all from
+        //      visible Activities.
+        //
+        //   2. [ForegroundServiceDidNotStopInTimeException] (API 31+) —
+        //      time-cap firing on dataSync. Switching to specialUse
+        //      eliminates this at the manifest level, but we keep the
+        //      catch arm as defence-in-depth for any other timer
+        //      Android decides to enforce on FGS types later. The
+        //      exception is normally delivered asynchronously to the
+        //      main thread (via ActivityThread, not from the
+        //      startForeground callsite); the catch only fires if the
+        //      system happens to surface it inline during onCreate,
+        //      but it costs nothing to be ready.
+        //
+        // The broader catch (Exception) is the safety net for any
+        // permission-related failure not already covered (e.g.
+        // POST_NOTIFICATIONS revoked at a bad moment). We log via
+        // DiagnosticLog so the next bug report captures the cause,
+        // then [stopSelf] — the service dies silently instead of
+        // crashing the process. Next activity-driven start cycles us
+        // back up cleanly.
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     KhordNotifications.SERVICE_NOTIFICATION_ID,
                     notif,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
                 )
             } else {
                 startForeground(KhordNotifications.SERVICE_NOTIFICATION_ID, notif)
             }
-        } catch (e: Exception) {
+        } catch (e: android.app.ForegroundServiceStartNotAllowedException) {
             DiagnosticLog.log(
                 "Khord",
-                "PushService: startForeground denied " +
-                    "(${e::class.simpleName}: ${e.message}); stopping self. " +
-                    "Will retry on next activity-driven start.",
+                "PushService: startForeground denied (start-not-allowed): " +
+                    "${e.message}; stopping self. Will retry on next " +
+                    "activity-driven start.",
+            )
+            stopSelf()
+        } catch (e: Exception) {
+            // ForegroundServiceDidNotStopInTimeException is nested
+            // inside android.app.RemoteServiceException which is
+            // @SystemApi and not in the public SDK — we can't name
+            // it in a catch arm. Probe by class-name instead so the
+            // diagnostic log carries the specific cause. Switching
+            // to specialUse should mean this branch is unreachable;
+            // tripwire only.
+            val simple = e::class.simpleName ?: "Exception"
+            val cause = when (simple) {
+                "ForegroundServiceDidNotStopInTimeException" ->
+                    "FGS time-cap fired (unexpected on specialUse)"
+                else -> simple
+            }
+            DiagnosticLog.log(
+                "Khord",
+                "PushService: startForeground threw $cause: " +
+                    "${e.message}; stopping self.",
             )
             stopSelf()
         }
