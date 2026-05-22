@@ -8,6 +8,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -38,14 +41,46 @@ class GroupChatViewModel(
         val messages: List<GroupMessageEntry> = emptyList(),
         val sending: Boolean = false,
         val error: String? = null,
+        /**
+         * The Throwable behind [error]. ChatScreen-parity: when this
+         * is non-null the screen surfaces a "Report" button that opens
+         * a BugReportDialog pre-populated with the stack trace. Cleared
+         * by [clearError] when the dialog dismisses.
+         */
+        val errorCause: Throwable? = null,
     )
+
+    /** Called by GroupChatScreen after the user dismisses the bug-report dialog. */
+    fun clearError() {
+        _state.update { it.copy(error = null, errorCause = null) }
+    }
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
     private val mutex = Mutex()
     private var pollJob: Job? = null
 
-    init { reload() }
+    init {
+        reload()
+        // Observe per-contact incoming-message ticks. The push service
+        // increments these after every successful drain that produced
+        // ≥1 plaintext payload. Group messages currently never appear
+        // in the "plaintext" set (they route through handleGroupMessage,
+        // not the legacy text path), so the tick fires whenever a
+        // group MEMBER sent a *direct* message — but reloading on any
+        // tick is cheap (just a local DB re-read) and gives us the
+        // same fast-refresh behaviour ChatScreen enjoys for the cases
+        // that DO bump the tick. Reloading on every tick across all
+        // fingerprints is also fine — coarse but correct, and the
+        // group-membership filter would require an extra DB read.
+        viewModelScope.launch {
+            AppContainer.incomingMessageTick
+                .map { it.values.sum() }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { reload() }
+        }
+    }
 
     fun startPolling() {
         if (pollJob?.isActive == true) return
@@ -73,7 +108,12 @@ class GroupChatViewModel(
                     messaging.sendGroupMessage(groupId, trimmed)
                     reloadLockedInternal()
                 }.onFailure { e ->
-                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                    _state.update {
+                        it.copy(
+                            error = e.message ?: e::class.simpleName,
+                            errorCause = e,
+                        )
+                    }
                 }
                 _state.update { it.copy(sending = false) }
             }

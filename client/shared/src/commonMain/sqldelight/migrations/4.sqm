@@ -1,0 +1,8 @@
+-- Migration from schema version 4 to 5.
+-- Adds contact.pending_payload to store a deferred protocol payload
+-- (typically a group_invite) that arrived from a still-pending
+-- contact, to be processed when the user accepts them. JSON-serialised
+-- inner-payload string, nullable; cleared after processing. Lets
+-- group invites from strangers go through the acceptance gate like
+-- direct messages do, without losing the group metadata.
+ALTER TABLE contact ADD COLUMN pending_payload TEXT;

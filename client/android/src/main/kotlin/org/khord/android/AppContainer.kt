@@ -95,6 +95,23 @@ object AppContainer {
     var openChatFingerprint: String? = null
 
     /**
+     * Group analog of [openChatFingerprint]: the groupId of the
+     * currently-foregrounded group chat, or null. Set by
+     * GroupChatScreen's DisposableEffect on entry, cleared on
+     * dispose. The push service can read this in a future patch to
+     * suppress group-message notification banners when the user is
+     * already looking at the relevant group. Currently no-op against
+     * KhordPushService — group_message payloads aren't routed into
+     * the notification path today (handlePush returns early when
+     * receiveMessages' returned plaintext list is empty, which it is
+     * for group payloads since they take the handleGroupMessage
+     * branch rather than the legacy text branch). Keeping the
+     * plumbing in place for when that gets wired up.
+     */
+    @Volatile
+    var openGroupId: String? = null
+
+    /**
      * Per-contact consecutive `receiveMessages()` failure count.
      * Incremented by [recordReceiveFailure] from callers that drive
      * receive (ChatViewModel poll loop, KhordPushService push handler);
