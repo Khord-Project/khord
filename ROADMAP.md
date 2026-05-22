@@ -91,6 +91,24 @@ These are confirmed goals, not yet scheduled.
 - [ ] Data processing commitment for community servers
 - [ ] CONTRIBUTING.md with development methodology
 
+### Trust & Verification
+- [ ] Contact fingerprint comparison screen
+- [ ] Verified contact badge (drops on key change)
+
+### Privacy & UX
+- [ ] Incognito keyboard (no personalized learning)
+- [ ] Typing indicators (optional, encrypted)
+- [ ] Read receipts (optional, encrypted, per-conversation)
+- [ ] Reply to specific message (quote-reply)
+- [ ] Local message search
+
+### Resilience
+- [ ] Offline message queue with auto-retry
+- [ ] Server health indicator in app
+
+### Developer & Community
+- [ ] Public API documentation (OpenAPI/Swagger)
+
 ---
 
 ## 🔭 Exploring
@@ -101,6 +119,18 @@ Ideas we're interested in but haven't committed to.
 - [ ] Desktop client
 - [ ] Disappearing messages
 - [ ] One-time secret sharing service (self-hosted at khord.org)
+
+---
+
+## 🚫 Deliberate Exclusions
+
+These are intentional design decisions, not missing features.
+
+- No "last seen" timestamps
+- No contact discovery from phone contacts
+- No cloud backup of messages
+- No social features (stories, status, profiles)
+- No GIF/sticker support — standard Unicode emoji only
 
 ---
 
