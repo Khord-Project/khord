@@ -90,7 +90,20 @@ object KhordNotifications {
         displayName: String,
         preview: String,
     ): Pair<Int, Notification> {
+        // PendingIntent identity gotcha: Intent EXTRAS are NOT part of
+        // `filterEquals`. Two per-contact intents with the same
+        // (component, action, data, categories, flags) but different
+        // extras count as equal, so FLAG_UPDATE_CURRENT collapses them
+        // and only the most recently constructed PendingIntent's
+        // extras survive — meaning a tap on contact A's notification
+        // can open contact B's chat. Fix: give each intent a unique
+        // `data` URI keyed off the fingerprint so filterEquals returns
+        // false across contacts. (The request code is also per-
+        // fingerprint as a belt-and-suspenders, but data URI is what
+        // actually makes them distinct.)
         val deepLink = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = android.net.Uri.parse("khord://chat/$contactFingerprint")
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_OPEN_CHAT_FINGERPRINT, contactFingerprint)
         }
