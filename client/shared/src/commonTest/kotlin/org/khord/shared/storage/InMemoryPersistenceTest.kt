@@ -187,6 +187,67 @@ class InMemoryPersistenceTest {
     }
 
     @Test
+    fun message_uuid_round_trip_and_edit_flag() = runTest {
+        val p = InMemoryPersistence()
+        val fp = "1".repeat(64)
+        val uuid = "11112222-3333-4444-5555-666677778888"
+
+        // Save without uuid (legacy pre-alpha.14 message), then with.
+        p.saveMessage(fp, MessageDirection.SENT, "no uuid here", "ts1", messageUuid = null)
+        p.saveMessage(fp, MessageDirection.SENT, "original body", "ts2", messageUuid = uuid)
+
+        val before = p.loadMessages(fp)
+        assertEquals(2, before.size)
+        assertEquals(null, before[0].messageUuid)
+        assertEquals(uuid, before[1].messageUuid)
+        assertEquals(false, before[0].edited)
+        assertEquals(false, before[1].edited)
+
+        // Look up + update via uuid.
+        val lookup = p.findMessageByUuid(uuid)
+        assertEquals(fp, lookup?.contactFingerprint)
+        assertEquals(MessageDirection.SENT, lookup?.direction)
+
+        p.updateMessageBodyByUuid(uuid, "edited body")
+
+        val after = p.loadMessages(fp)
+        assertEquals("no uuid here", after[0].body)
+        assertEquals(false, after[0].edited)
+        assertEquals("edited body", after[1].body)
+        assertEquals(true, after[1].edited)
+    }
+
+    @Test
+    fun find_by_uuid_returns_null_for_unknown_uuid() = runTest {
+        val p = InMemoryPersistence()
+        assertNull(p.findMessageByUuid("does-not-exist"))
+        assertNull(p.findGroupMessageByUuid("does-not-exist"))
+    }
+
+    @Test
+    fun group_message_uuid_round_trip_and_edit_flag() = runTest {
+        val p = InMemoryPersistence()
+        val groupId = "abcd".repeat(8)
+        val uuid = "aaaabbbb-cccc-dddd-eeee-ffff00001111"
+        p.saveGroup(groupId, "Test Group", createdByFingerprint = "a".repeat(64), isAdmin = true)
+        p.saveGroupMessage(
+            groupId, senderFingerprint = "a".repeat(64), senderDisplayName = "Alice",
+            body = "group hi", timestamp = "ts", direction = MessageDirection.SENT,
+            messageUuid = uuid,
+        )
+
+        val lookup = p.findGroupMessageByUuid(uuid)
+        assertEquals(groupId, lookup?.groupId)
+        assertEquals("a".repeat(64), lookup?.senderFingerprint)
+
+        p.updateGroupMessageBodyByUuid(uuid, "group edited")
+        val msgs = p.loadGroupMessages(groupId)
+        assertEquals(1, msgs.size)
+        assertEquals("group edited", msgs[0].body)
+        assertEquals(true, msgs[0].edited)
+    }
+
+    @Test
     fun panic_wipes_everything() = runTest {
         val p = InMemoryPersistence()
         val id = aliceIdentity()

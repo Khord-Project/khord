@@ -111,6 +111,13 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
             )
         },
     ) { padding ->
+        // Edit-mode state lives at the screen level (not inside the
+        // ViewModel) — purely a UI concern. When non-null we're
+        // editing the message with this UUID; the input pre-fills
+        // with the current body, a small banner above the input
+        // shows "Editing message" with an X to cancel, and the send
+        // button submits an edit instead of a new message.
+        var editingUuid by remember { mutableStateOf<String?>(null) }
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -127,6 +134,10 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     MessageRow(
                         msg = msg,
                         senderName = state.contactDisplayName,
+                        onEdit = { uuid, body ->
+                            editingUuid = uuid
+                            draft = body
+                        },
                     )
                 }
             }
@@ -163,6 +174,28 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
             if (unavailable) {
                 UnavailableBanner()
             }
+            // Edit-mode banner — sits between the message list and
+            // the composer. Cancel reverts to fresh-message mode
+            // and clears the pre-filled draft.
+            if (editingUuid != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Editing message",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    androidx.compose.material3.TextButton(onClick = {
+                        editingUuid = null
+                        draft = ""
+                    }) { Text("Cancel") }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -174,6 +207,7 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     placeholder = {
                         Text(
                             if (unavailable) "Contact unavailable"
+                            else if (editingUuid != null) "Edit message…"
                             else "Type a message"
                         )
                     },
@@ -184,10 +218,18 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                 Button(
                     enabled = !state.sending && !unavailable && draft.isNotBlank(),
                     onClick = {
-                        vm.send(draft)
+                        val uuid = editingUuid
+                        if (uuid != null) {
+                            vm.edit(uuid, draft)
+                            editingUuid = null
+                        } else {
+                            vm.send(draft)
+                        }
                         draft = ""
                     },
-                ) { Text("Send") }
+                ) {
+                    Text(if (editingUuid != null) "Save" else "Send")
+                }
             }
         }
     }
@@ -232,7 +274,11 @@ private fun DateSeparator(iso: String) {
 }
 
 @Composable
-private fun MessageRow(msg: MessageEntry, senderName: String?) {
+private fun MessageRow(
+    msg: MessageEntry,
+    senderName: String?,
+    onEdit: (uuid: String, body: String) -> Unit,
+) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val arrange = if (isSent) Arrangement.End else Arrangement.Start
     val align = if (isSent) Alignment.End else Alignment.Start
@@ -248,10 +294,14 @@ private fun MessageRow(msg: MessageEntry, senderName: String?) {
             )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrange) {
-            MessageBubble(msg)
+            MessageBubble(msg, onEdit = onEdit)
         }
+        // Timestamp + optional (edited) tag on the same line. The
+        // tag goes after the time, in the same muted style.
+        val timestampLabel = TimestampFormat.formatMessageTime(msg.timestamp)
+        val full = if (msg.edited) "$timestampLabel · (edited)" else timestampLabel
         Text(
-            TimestampFormat.formatMessageTime(msg.timestamp),
+            full,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
@@ -261,13 +311,20 @@ private fun MessageRow(msg: MessageEntry, senderName: String?) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(msg: MessageEntry) {
+private fun MessageBubble(
+    msg: MessageEntry,
+    onEdit: (uuid: String, body: String) -> Unit,
+) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val chat = LocalKhordChatColors.current
     val bg = if (isSent) chat.sentBubble else chat.receivedBubble
     val fg = if (isSent) chat.sentText else chat.receivedText
     val context = androidx.compose.ui.platform.LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
+    // Edit is only meaningful for messages we sent that carry a UUID
+    // (pre-alpha.14 messages are un-editable because we can't
+    // identify them on the receiver side).
+    val canEdit = isSent && msg.messageUuid != null
     Box(
         modifier = Modifier
             .widthIn(max = 280.dp)
@@ -302,6 +359,15 @@ private fun MessageBubble(msg: MessageEntry) {
                     }
                 },
             )
+            if (canEdit) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Edit") },
+                    onClick = {
+                        menuOpen = false
+                        onEdit(msg.messageUuid!!, msg.body)
+                    },
+                )
+            }
         }
     }
 }

@@ -277,6 +277,7 @@ internal class DbPersistence(
         direction: MessageDirection,
         body: String,
         timestamp: String,
+        messageUuid: String?,
     ) {
         db.messageQueries.insertMessage(
             contact_fingerprint = contactFingerprint,
@@ -284,6 +285,7 @@ internal class DbPersistence(
             body = body,
             timestamp = timestamp,
             stored_at = now(),
+            message_uuid = messageUuid,
         )
     }
 
@@ -295,8 +297,27 @@ internal class DbPersistence(
                 body = it.body,
                 timestamp = it.timestamp,
                 storedAt = it.stored_at,
+                messageUuid = it.message_uuid,
+                edited = it.edited != 0L,
             )
         }
+
+    override suspend fun findMessageByUuid(messageUuid: String): MessageLookup? {
+        if (messageUuid.isEmpty()) return null
+        val row = db.messageQueries.selectMessageByUuid(messageUuid).executeAsOneOrNull()
+            ?: return null
+        val storedUuid = row.message_uuid ?: return null
+        return MessageLookup(
+            id = row.id,
+            contactFingerprint = row.contact_fingerprint,
+            direction = directionFromWire(row.direction),
+            messageUuid = storedUuid,
+        )
+    }
+
+    override suspend fun updateMessageBodyByUuid(messageUuid: String, newBody: String) {
+        db.messageQueries.updateMessageBodyByUuid(newBody, messageUuid)
+    }
 
     // ── Groups (ADR 023) ────────────────────────────────────────────────────
 
@@ -383,6 +404,7 @@ internal class DbPersistence(
         body: String,
         timestamp: String,
         direction: MessageDirection,
+        messageUuid: String?,
     ) {
         db.groupMessageQueries.insertGroupMessage(
             group_id = groupId,
@@ -392,7 +414,25 @@ internal class DbPersistence(
             timestamp = timestamp,
             direction = direction.wire,
             stored_at = now(),
+            message_uuid = messageUuid,
         )
+    }
+
+    override suspend fun findGroupMessageByUuid(messageUuid: String): GroupMessageLookup? {
+        if (messageUuid.isEmpty()) return null
+        val row = db.groupMessageQueries.selectGroupMessageByUuid(messageUuid)
+            .executeAsOneOrNull() ?: return null
+        val storedUuid = row.message_uuid ?: return null
+        return GroupMessageLookup(
+            id = row.id,
+            groupId = row.group_id,
+            senderFingerprint = row.sender_fingerprint,
+            messageUuid = storedUuid,
+        )
+    }
+
+    override suspend fun updateGroupMessageBodyByUuid(messageUuid: String, newBody: String) {
+        db.groupMessageQueries.updateGroupMessageBodyByUuid(newBody, messageUuid)
     }
 
     override suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord> =
@@ -405,6 +445,8 @@ internal class DbPersistence(
                 timestamp = it.timestamp,
                 direction = directionFromWire(it.direction),
                 storedAt = it.stored_at,
+                messageUuid = it.message_uuid,
+                edited = it.edited != 0L,
             )
         }
 

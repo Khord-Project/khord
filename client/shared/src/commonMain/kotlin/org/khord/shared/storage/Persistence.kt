@@ -124,8 +124,25 @@ internal interface Persistence {
         direction: MessageDirection,
         body: String,
         timestamp: String,
+        messageUuid: String? = null,
     )
     suspend fun loadMessages(contactFingerprint: String): List<StoredMessage>
+
+    /**
+     * Look up a 1:1 message by its UUID. Returns null if no row matches
+     * (forged UUID, message deleted, or pre-alpha.14 message without
+     * a UUID). Used by [Messaging.editMessage] to locate the sender's
+     * own message + by [Messaging.handleMessageEdit] to find the
+     * target of an inbound edit before sender verification.
+     */
+    suspend fun findMessageByUuid(messageUuid: String): MessageLookup?
+
+    /**
+     * Replace the body of a 1:1 message identified by UUID and flag
+     * it as edited. Caller verifies sender identity before calling.
+     * No-op if the UUID doesn't match anything.
+     */
+    suspend fun updateMessageBodyByUuid(messageUuid: String, newBody: String)
 
     // ── Groups (ADR 023) ────────────────────────────────────────────────────
     //
@@ -171,9 +188,16 @@ internal interface Persistence {
         body: String,
         timestamp: String,
         direction: MessageDirection,
+        messageUuid: String? = null,
     )
 
     suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord>
+
+    /** Group equivalent of [findMessageByUuid]. */
+    suspend fun findGroupMessageByUuid(messageUuid: String): GroupMessageLookup?
+
+    /** Group equivalent of [updateMessageBodyByUuid]. */
+    suspend fun updateGroupMessageBodyByUuid(messageUuid: String, newBody: String)
 
     // ── Key-server token cache ─────────────────────────────────────────────
 
@@ -283,6 +307,20 @@ internal data class StoredMessage(
     val body: String,
     val timestamp: String,
     val storedAt: String,
+    val messageUuid: String? = null,
+    val edited: Boolean = false,
+)
+
+/**
+ * Slim projection returned by [Persistence.findMessageByUuid]: just
+ * enough info for the orchestrator to do sender-identity verification
+ * (contactFingerprint + direction) without round-tripping the body.
+ */
+internal data class MessageLookup(
+    val id: Long,
+    val contactFingerprint: String,
+    val direction: MessageDirection,
+    val messageUuid: String,
 )
 
 internal data class KeyServerTokenRecord(
@@ -313,4 +351,18 @@ internal data class GroupMessageRecord(
     val timestamp: String,
     val direction: MessageDirection,
     val storedAt: String,
+    val messageUuid: String? = null,
+    val edited: Boolean = false,
+)
+
+/**
+ * Group equivalent of [MessageLookup]: orchestrator uses
+ * senderFingerprint to verify the edit originated from the same
+ * member who sent the original message.
+ */
+internal data class GroupMessageLookup(
+    val id: Long,
+    val groupId: String,
+    val senderFingerprint: String,
+    val messageUuid: String,
 )

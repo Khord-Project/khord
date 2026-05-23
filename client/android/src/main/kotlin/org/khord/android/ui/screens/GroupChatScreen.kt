@@ -1,6 +1,8 @@
 package org.khord.android.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -104,6 +106,7 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
             )
         },
     ) { padding ->
+        var editingUuid by remember { mutableStateOf<String?>(null) }
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -117,7 +120,13 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                     if (showDateHeader) {
                         GroupDateSeparator(msg.timestamp)
                     }
-                    GroupMessageRow(msg = msg)
+                    GroupMessageRow(
+                        msg = msg,
+                        onEdit = { uuid, body ->
+                            editingUuid = uuid
+                            draft = body
+                        },
+                    )
                 }
             }
             state.error?.let {
@@ -125,6 +134,25 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp))
+            }
+            if (editingUuid != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Editing message",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    androidx.compose.material3.TextButton(onClick = {
+                        editingUuid = null
+                        draft = ""
+                    }) { Text("Cancel") }
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -134,17 +162,27 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type a message") },
+                    placeholder = {
+                        Text(if (editingUuid != null) "Edit message…" else "Type a message")
+                    },
                     singleLine = false,
                 )
                 Spacer(Modifier.width(8.dp))
                 Button(
                     enabled = !state.sending && draft.isNotBlank(),
                     onClick = {
-                        vm.send(draft)
+                        val uuid = editingUuid
+                        if (uuid != null) {
+                            vm.edit(uuid, draft)
+                            editingUuid = null
+                        } else {
+                            vm.send(draft)
+                        }
                         draft = ""
                     },
-                ) { Text("Send") }
+                ) {
+                    Text(if (editingUuid != null) "Save" else "Send")
+                }
             }
         }
     }
@@ -164,14 +202,21 @@ private fun GroupDateSeparator(iso: String) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GroupMessageRow(msg: GroupMessageEntry) {
+private fun GroupMessageRow(
+    msg: GroupMessageEntry,
+    onEdit: (uuid: String, body: String) -> Unit,
+) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val align = if (isSent) Alignment.End else Alignment.Start
     val arrange = if (isSent) Arrangement.End else Arrangement.Start
     val chat = LocalKhordChatColors.current
     val bg = if (isSent) chat.sentBubble else chat.receivedBubble
     val fg = if (isSent) chat.sentText else chat.receivedText
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
+    val canEdit = isSent && msg.messageUuid != null
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = align) {
         // Group chats always show the sender label above received bubbles
         // (the user sees N senders so attribution is mandatory). Sent
@@ -193,13 +238,51 @@ private fun GroupMessageRow(msg: GroupMessageEntry) {
                     .widthIn(max = 280.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(bg)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { menuOpen = true },
+                    )
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Text(msg.body, color = fg, style = MaterialTheme.typography.bodyMedium)
+                androidx.compose.material3.DropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                ) {
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("Copy") },
+                        onClick = {
+                            val cm = context.getSystemService(
+                                android.content.Context.CLIPBOARD_SERVICE,
+                            ) as android.content.ClipboardManager
+                            cm.setPrimaryClip(
+                                android.content.ClipData.newPlainText("Khord message", msg.body),
+                            )
+                            menuOpen = false
+                            if (android.os.Build.VERSION.SDK_INT
+                                < android.os.Build.VERSION_CODES.TIRAMISU) {
+                                android.widget.Toast.makeText(
+                                    context, "Copied", android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
+                    )
+                    if (canEdit) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Edit") },
+                            onClick = {
+                                menuOpen = false
+                                onEdit(msg.messageUuid!!, msg.body)
+                            },
+                        )
+                    }
+                }
             }
         }
+        val timestampLabel = TimestampFormat.formatMessageTime(msg.timestamp)
+        val full = if (msg.edited) "$timestampLabel · (edited)" else timestampLabel
         Text(
-            TimestampFormat.formatMessageTime(msg.timestamp),
+            full,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),

@@ -11,22 +11,40 @@ CREATE TABLE group_message (
     body                  TEXT    NOT NULL,
     timestamp             TEXT    NOT NULL,
     direction             TEXT    NOT NULL CHECK (direction IN ('sent', 'received')),
-    stored_at             TEXT    NOT NULL
+    stored_at             TEXT    NOT NULL,
+    -- See Message.sq for semantics of these two columns; carried in
+    -- the inner payload, used by message_edit to target a specific
+    -- historical message by sender-issued UUID rather than fragile
+    -- (group_id, timestamp) coordinates.
+    message_uuid          TEXT,
+    edited                INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX group_message_by_group ON group_message(group_id, id);
+CREATE INDEX group_message_by_uuid ON group_message(message_uuid);
 
 insertGroupMessage:
 INSERT INTO group_message(
     group_id, sender_fingerprint, sender_display_name,
-    body, timestamp, direction, stored_at
-) VALUES (?, ?, ?, ?, ?, ?, ?);
+    body, timestamp, direction, stored_at, message_uuid
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 selectGroupMessages:
-SELECT id, sender_fingerprint, sender_display_name, body, timestamp, direction, stored_at
+SELECT id, sender_fingerprint, sender_display_name, body, timestamp, direction, stored_at, message_uuid, edited
   FROM group_message
  WHERE group_id = ?
  ORDER BY id ASC;
+
+selectGroupMessageByUuid:
+SELECT id, group_id, sender_fingerprint, body, timestamp, message_uuid, edited
+  FROM group_message
+ WHERE message_uuid = ?
+ LIMIT 1;
+
+updateGroupMessageBodyByUuid:
+UPDATE group_message
+   SET body = ?, edited = 1
+ WHERE message_uuid = ?;
 
 deleteGroupMessages:
 DELETE FROM group_message WHERE group_id = ?;

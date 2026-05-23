@@ -29,6 +29,12 @@ import kotlinx.serialization.Serializable
  *                                Uses [groupId] + [groupMemberFingerprint].
  *   - `"group_name_changed"`   — admin renamed the group. Uses [groupId]
  *                                + [groupName].
+ *   - `"message_edit"`         — update the body of a previously-sent
+ *                                message identified by [messageUuid].
+ *                                Uses [messageUuid] + [newBody], plus
+ *                                [groupId] when the original was a
+ *                                group_message. Sender verification
+ *                                lives in the orchestrator.
  * Unknown types still raise [UnsupportedPayloadType] for the legacy
  * one-to-one path; the group dispatch in receiveMessages routes by
  * `type` BEFORE the text-only path runs.
@@ -75,6 +81,23 @@ internal data class InnerPayload(
      * DIFFERENT fingerprint than their own).
      */
     val groupMemberFingerprint: String? = null,
+
+    // ── Message-editing fields (alpha.14, ADR 026) ───────────────────
+    /**
+     * Stable per-message UUID, sender-issued at insert time and
+     * persisted by both sides. Present on every "text" and
+     * "group_message" payload sent by alpha.14+ clients; also
+     * required on "message_edit" payloads (it's the reference to
+     * the original message). Null on pre-alpha.14 messages (those
+     * remain un-editable).
+     */
+    val messageUuid: String? = null,
+    /**
+     * Replacement body for a "message_edit" payload. Required on
+     * message_edit; null on all other types. Distinct from [body]
+     * so we don't have to overload its semantics.
+     */
+    val newBody: String? = null,
 )
 
 /**
