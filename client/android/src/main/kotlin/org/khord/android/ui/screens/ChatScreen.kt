@@ -248,7 +248,10 @@ private fun MessageRow(msg: MessageEntry, senderName: String?) {
             )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrange) {
-            MessageBubble(msg)
+            MessageBubble(
+                body = msg.body,
+                isSent = msg.direction == MessageEntry.Direction.SENT,
+            )
         }
         Text(
             TimestampFormat.formatMessageTime(msg.timestamp),
@@ -259,49 +262,7 @@ private fun MessageRow(msg: MessageEntry, senderName: String?) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun MessageBubble(msg: MessageEntry) {
-    val isSent = msg.direction == MessageEntry.Direction.SENT
-    val chat = LocalKhordChatColors.current
-    val bg = if (isSent) chat.sentBubble else chat.receivedBubble
-    val fg = if (isSent) chat.sentText else chat.receivedText
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var menuOpen by remember { mutableStateOf(false) }
-    Box(
-        modifier = Modifier
-            .widthIn(max = 280.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(bg)
-            .combinedClickable(
-                onClick = {},
-                onLongClick = { menuOpen = true },
-            )
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        Text(msg.body, color = fg, style = MaterialTheme.typography.bodyMedium)
-        androidx.compose.material3.DropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-        ) {
-            androidx.compose.material3.DropdownMenuItem(
-                text = { Text("Copy") },
-                onClick = {
-                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                    cm.setPrimaryClip(
-                        android.content.ClipData.newPlainText("Khord message", msg.body),
-                    )
-                    menuOpen = false
-                    // Android 13+ shows its own copy toast; on older
-                    // versions we don't surface one to avoid noise.
-                    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
-                        android.widget.Toast.makeText(
-                            context, "Copied", android.widget.Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                },
-            )
-        }
-    }
-}
+// MessageBubble — shared between ChatScreen and GroupChatScreen, now
+// lives in MessageBubble.kt. Use `MessageBubble(body, isSent)` from
+// the row composable below; URL linkify + long-press copy are handled
+// there.

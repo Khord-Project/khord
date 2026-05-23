@@ -31,7 +31,8 @@ enum class KhordThemeChoice(val displayName: String) {
     TEAL("Teal"),
     FOREST("Forest"),
     MINIMAL("Minimal"),
-    MATRIX("Matrix"),
+    MATRIX_PHOSPHOR("Matrix Phosphor"),
+    MATRIX_TERMINAL("Matrix Terminal"),
 }
 
 /**
@@ -44,7 +45,12 @@ val KhordThemeChoice.swatchColor: Color
         KhordThemeChoice.TEAL -> Color(0xFF1A535C)
         KhordThemeChoice.FOREST -> Color(0xFF2D4739)
         KhordThemeChoice.MINIMAL -> Color(0xFF1C1C1E)
-        KhordThemeChoice.MATRIX -> Color(0xFF00FF41)
+        // Both Matrix variants share the same accent green; the
+        // received-bubble tint is the actual visual differentiator
+        // (phosphor cyan-green vs terminal grey-green). Show a
+        // smaller secondary swatch in the picker if we ever care.
+        KhordThemeChoice.MATRIX_PHOSPHOR -> Color(0xFF00FF41)
+        KhordThemeChoice.MATRIX_TERMINAL -> Color(0xFF00FF41)
     }
 
 /**
@@ -77,10 +83,11 @@ internal fun palette(choice: KhordThemeChoice, dark: Boolean): Pair<ColorScheme,
         KhordThemeChoice.TEAL -> if (dark) tealDark() else tealLight()
         KhordThemeChoice.FOREST -> if (dark) forestDark() else forestLight()
         KhordThemeChoice.MINIMAL -> if (dark) minimalDark() else minimalLight()
-        // Matrix is intentionally dark-only — a "light Matrix" makes
-        // no design sense. Return the dark palette regardless of the
-        // device's day/night setting.
-        KhordThemeChoice.MATRIX -> matrixDark()
+        // Both Matrix variants are intentionally dark-only — a
+        // "light Matrix" makes no design sense. Return the dark
+        // palette regardless of the device's day/night setting.
+        KhordThemeChoice.MATRIX_PHOSPHOR -> matrixPhosphor()
+        KhordThemeChoice.MATRIX_TERMINAL -> matrixTerminal()
     }
 
 // ── Teal ─────────────────────────────────────────────────────────────────────
@@ -234,33 +241,65 @@ private fun minimalDark(): Pair<ColorScheme, KhordChatColors> {
     )
 }
 
-// ── Matrix ───────────────────────────────────────────────────────────────────
-// Phosphor-green on black. Terminal aesthetic. Dark-only (a light
-// Matrix would be visually wrong — the whole point is the green-on-
-// black readout look). Primary: matrix green #00FF41. Muted: dimmer
-// green #008F11. Surface: near-black #0D0208.
+// ── Matrix Phosphor ──────────────────────────────────────────────────────────
+// Pure phosphor green-on-black. Both sent and received text glow in
+// the matrix-green spectrum (sent: brighter green, received: cyan-
+// leaning green). Dark-only.
 
-private fun matrixDark(): Pair<ColorScheme, KhordChatColors> {
-    val primary = Color(0xFF00FF41)
-    val muted = Color(0xFF008F11)
+private fun matrixPhosphor(): Pair<ColorScheme, KhordChatColors> {
+    val accent = Color(0xFF00FF41)       // matrix green
+    val muted = Color(0xFF008F72)         // cyan-green muted
     val bg = Color(0xFF000000)
-    val surface = Color(0xFF0D0208)
+    val surface = Color(0xFF0a1a1a)       // received bubble bg
+    val sentBg = Color(0xFF0d2b0d)        // sent bubble bg
+    val receivedText = Color(0xFF00CCA3)  // cyan-leaning green
     return darkColorScheme(
-        primary = primary,
+        primary = accent,
         onPrimary = bg,
-        secondary = primary,
+        secondary = accent,
         onSecondary = bg,
         background = bg,
-        onBackground = primary,
+        onBackground = accent,
         surface = surface,
-        onSurface = primary,
-        surfaceVariant = Color(0xFF0A1A0E),
+        onSurface = accent,
+        surfaceVariant = surface,
         onSurfaceVariant = muted,
     ) to KhordChatColors(
-        sentBubble = surface,
-        sentText = primary,
-        receivedBubble = Color(0xFF0A1A0E),
-        receivedText = primary,
+        sentBubble = sentBg,
+        sentText = accent,
+        receivedBubble = surface,
+        receivedText = receivedText,
+    )
+}
+
+// ── Matrix Terminal ──────────────────────────────────────────────────────────
+// Green sent text + neutral grey-green received text. Closer to a
+// classic linux terminal feel where your own input is highlighted
+// and other output is dimmer. Dark-only.
+
+private fun matrixTerminal(): Pair<ColorScheme, KhordChatColors> {
+    val accent = Color(0xFF00FF41)       // matrix green (sent + accent)
+    val muted = Color(0xFF708070)         // grey-green muted
+    val bg = Color(0xFF000000)
+    val surface = Color(0xFF111111)       // received bubble bg
+    val sentBg = Color(0xFF0d2b0d)        // sent bubble bg
+    val receivedText = Color(0xFFA0B0A0)  // light grey-green
+    return darkColorScheme(
+        primary = accent,
+        onPrimary = bg,
+        secondary = accent,
+        onSecondary = bg,
+        background = bg,
+        onBackground = accent,
+        surface = surface,
+        onSurface = accent,
+        surfaceVariant = surface,
+        onSurfaceVariant = muted,
+    ) to KhordChatColors(
+        sentBubble = sentBg,
+        sentText = accent,
+        receivedBubble = surface,
+        receivedText = receivedText,
     )
 }
 
@@ -285,6 +324,11 @@ private const val PREFS_KEY = "theme_name"
 fun loadThemeChoice(context: Context): KhordThemeChoice {
     val name = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         .getString(PREFS_KEY, null)
+    // Alpha.13 shipped a single MATRIX theme; alpha.14+ splits it
+    // into MATRIX_PHOSPHOR and MATRIX_TERMINAL. Auto-promote any
+    // existing alpha.13 selection to the closer variant (phosphor)
+    // so upgraders don't get silently reset to TEAL.
+    if (name == "MATRIX") return KhordThemeChoice.MATRIX_PHOSPHOR
     return KhordThemeChoice.entries.firstOrNull { it.name == name }
         ?: KhordThemeChoice.TEAL
 }

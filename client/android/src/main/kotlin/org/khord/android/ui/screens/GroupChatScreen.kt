@@ -66,7 +66,18 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
 
     DisposableEffect(Unit) {
         vm.startPolling()
-        onDispose { vm.stopPolling() }
+        // Mirror ChatScreen's foregrounded-chat tracking. No
+        // notifications get posted for group_message payloads today
+        // (push service short-circuits before the banner path —
+        // see GroupChatViewModel init for context), so the
+        // openGroupId signal + the future-facing dismissal are
+        // no-ops against current behaviour. Both are wired so the
+        // moment we add group notifications they Just Work.
+        org.khord.android.AppContainer.openGroupId = groupId
+        onDispose {
+            org.khord.android.AppContainer.openGroupId = null
+            vm.stopPolling()
+        }
     }
 
     LaunchedEffect(state.messages.size) {
@@ -120,11 +131,33 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                     GroupMessageRow(msg = msg)
                 }
             }
-            state.error?.let {
-                Text("Error: $it",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 16.dp))
+            var showReport by remember { mutableStateOf(false) }
+            state.error?.let { msg ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Error: $msg",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (state.errorCause != null) {
+                        androidx.compose.material3.TextButton(
+                            onClick = { showReport = true },
+                        ) { Text("Report") }
+                    }
+                }
+            }
+            if (showReport && state.errorCause != null) {
+                BugReportDialog(
+                    error = state.errorCause,
+                    onDismiss = {
+                        showReport = false
+                        vm.clearError()
+                    },
+                )
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -169,9 +202,6 @@ private fun GroupMessageRow(msg: GroupMessageEntry) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val align = if (isSent) Alignment.End else Alignment.Start
     val arrange = if (isSent) Arrangement.End else Arrangement.Start
-    val chat = LocalKhordChatColors.current
-    val bg = if (isSent) chat.sentBubble else chat.receivedBubble
-    val fg = if (isSent) chat.sentText else chat.receivedText
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = align) {
         // Group chats always show the sender label above received bubbles
         // (the user sees N senders so attribution is mandatory). Sent
@@ -188,15 +218,10 @@ private fun GroupMessageRow(msg: GroupMessageEntry) {
             )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrange) {
-            Box(
-                modifier = Modifier
-                    .widthIn(max = 280.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(bg)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text(msg.body, color = fg, style = MaterialTheme.typography.bodyMedium)
-            }
+            MessageBubble(
+                body = msg.body,
+                isSent = isSent,
+            )
         }
         Text(
             TimestampFormat.formatMessageTime(msg.timestamp),

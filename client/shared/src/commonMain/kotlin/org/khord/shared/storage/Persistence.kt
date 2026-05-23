@@ -86,6 +86,14 @@ internal interface Persistence {
     suspend fun setContactStatus(fingerprint: String, status: ContactStatus)
 
     /**
+     * Stash (or clear, when null) a deferred protocol payload on a
+     * contact row. Used to hold an inbound group_invite from a
+     * still-pending contact until the user accepts; the orchestrator
+     * then re-processes the payload and writes null back here.
+     */
+    suspend fun setContactPendingPayload(fingerprint: String, payload: String?)
+
+    /**
      * Remove a contact and every record that depends on it: the
      * pairwise Double Ratchet session row, every persisted message,
      * and the contact row itself. The relay-side mailbox binding is
@@ -238,6 +246,13 @@ internal data class ContactInfo(
     val qr: QrPayload,
     val displayName: String,
     val status: ContactStatus = ContactStatus.ACCEPTED,
+    /**
+     * JSON-encoded inner payload deferred from a previous receive
+     * while this contact was still pending — typically a
+     * group_invite. Processed and cleared on accept. Null in the
+     * common case.
+     */
+    val pendingPayload: String? = null,
 )
 
 internal enum class ContactStatus {

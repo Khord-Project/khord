@@ -21,14 +21,31 @@ CREATE TABLE contact (
     --                Accept-s or Decline-s them from a "Requests" screen.
     -- Existing rows on pre-schema-4 databases default to 'accepted' via
     -- the 3.sqm migration.
-    status             TEXT NOT NULL DEFAULT 'accepted'
+    status             TEXT NOT NULL DEFAULT 'accepted',
+    -- Deferred protocol payload (JSON-encoded InnerPayload) that
+    -- arrived from this contact while they were still pending. Only
+    -- ever set for status='pending' rows; cleared on accept (we
+    -- process the payload, then null this out). Currently used for
+    -- group_invite — without this, a stranger's invite would be
+    -- silently dropped because their contact row is pending and the
+    -- group_invite branch otherwise short-circuits before the group
+    -- gets created locally. Nullable, default null. Added by 4.sqm.
+    pending_payload    TEXT
 );
 
+-- INSERT OR REPLACE replaces every column including pending_payload.
+-- To preserve a previously-stored payload across re-upserts, the
+-- DbPersistence saveContact wraps this in a transaction that first
+-- reads the current pending_payload and passes it back in. The
+-- dedicated [setContactPendingPayload] is the only direct writer.
 upsertContact:
 INSERT OR REPLACE INTO contact(
     fingerprint, ed25519_public, key_server_url, relay_server_url,
-    contact_mailbox, stored_at, display_name, status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+    contact_mailbox, stored_at, display_name, status, pending_payload
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+setContactPendingPayload:
+UPDATE contact SET pending_payload = ? WHERE fingerprint = ?;
 
 selectContactByFingerprint:
 SELECT * FROM contact WHERE fingerprint = ?;
