@@ -1,24 +1,8 @@
--- Migration from schema version 4 to 5.
---
--- Adds message_uuid + edited columns to both per-contact `message`
--- and per-group `group_message` tables. UUIDs identify a message
--- across sender + receiver so the new "message_edit" payload type
--- can target a specific historical message by reference rather
--- than (e.g.) timestamp + body, which would be brittle.
---
--- All new columns are nullable / default-0 so existing alpha.13
--- rows migrate transparently. Pre-alpha.14 messages remain
--- un-editable (no UUID to reference them by) — a deliberate
--- trade-off that avoids needing to back-fill UUIDs.
---
--- NOTE: this 4.sqm migration may conflict with the polish-batch-2
--- branch's 4.sqm at merge time. Resolution depends on merge order;
--- whichever lands second should be renumbered to 5.sqm (or both
--- merged into a single 4.sqm).
-ALTER TABLE message ADD COLUMN message_uuid TEXT;
-ALTER TABLE message ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;
-CREATE INDEX message_by_uuid ON message(message_uuid);
-
-ALTER TABLE group_message ADD COLUMN message_uuid TEXT;
-ALTER TABLE group_message ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;
-CREATE INDEX group_message_by_uuid ON group_message(message_uuid);
+-- Migration from schema version 3 to 4.
+-- Adds contact.pending_payload to store a deferred protocol payload
+-- (typically a group_invite) that arrived from a still-pending
+-- contact, to be processed when the user accepts them. JSON-serialised
+-- inner-payload string, nullable; cleared after processing. Lets
+-- group invites from strangers go through the acceptance gate like
+-- direct messages do, without losing the group metadata.
+ALTER TABLE contact ADD COLUMN pending_payload TEXT;

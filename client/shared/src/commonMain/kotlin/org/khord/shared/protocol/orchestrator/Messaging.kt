@@ -376,6 +376,31 @@ class Messaging internal constructor(
         persistence.setContactStatus(
             fingerprint, org.khord.shared.storage.ContactStatus.ACCEPTED,
         )
+        // Process any payload deferred while this contact was pending.
+        // Classic case: a group_invite that landed before the user
+        // accepted. Without replay the group would never be created
+        // locally even though we now trust the sender. Read fresh
+        // from persistence (in-memory ContactInfo's pendingPayload
+        // can be stale), decode, apply, then clear both copies.
+        val freshInfo = persistence.loadContact(fingerprint)
+        val pending = freshInfo?.pendingPayload
+        if (pending != null) {
+            runCatching {
+                val payload = KhordJson.decodeFromString(
+                    InnerPayload.serializer(), pending,
+                )
+                if (payload.type == "group_invite") {
+                    applyGroupInvite(fingerprint, payload)
+                }
+                // Other payload types could be deferred in future; if
+                // we ever stored an unrecognised type we still clear
+                // it below rather than re-process indefinitely.
+            }
+            persistence.setContactPendingPayload(fingerprint, null)
+            contactsByFingerprint[fingerprint] = contactsByFingerprint[fingerprint]
+                ?.copy(pendingPayload = null)
+                ?: contactsByFingerprint[fingerprint]!!
+        }
     }
 
     /**
@@ -1299,15 +1324,45 @@ class Messaging internal constructor(
         contact: ContactSession,
         payload: InnerPayload,
     ) {
+        // Acceptance gate: if the sender is still PENDING, we DON'T
+        // create the group yet — the user hasn't decided whether to
+        // talk to this person. Stash the invite on the contact row;
+        // [acceptContact] re-runs this handler after promoting the
+        // contact to ACCEPTED. Without this gate, a stranger could
+        // populate the local group list (and trigger group-message
+        // notifications via the eventual group-notif feature)
+        // without ever passing the accept screen.
+        val info = contactsByFingerprint[contact.contactFingerprint]
+        if (info != null && info.status == org.khord.shared.storage.ContactStatus.PENDING) {
+            // NOTE: only the most recent deferred payload is kept — if a
+            // pending contact sends multiple group_invites before being
+            // accepted, only the latest survives. The user spec didn't
+            // call for queueing; if it becomes a real problem a separate
+            // pending_payloads table is the natural next step.
+            val asJson = KhordJson.encodeToString(InnerPayload.serializer(), payload)
+            persistence.setContactPendingPayload(contact.contactFingerprint, asJson)
+            contactsByFingerprint[contact.contactFingerprint] =
+                info.copy(pendingPayload = asJson)
+            return
+        }
+        applyGroupInvite(contact.contactFingerprint, payload)
+    }
+
+    /**
+     * The actual group-creation side effect of a group_invite. Factored
+     * out so [acceptContact] can replay a deferred invite without going
+     * through the sender-status gate a second time (and without
+     * needing to find a live ContactSession just to read the
+     * fingerprint).
+     */
+    private suspend fun applyGroupInvite(senderFingerprint: String, payload: InnerPayload) {
         val groupId = payload.groupId ?: return
         val groupName = payload.groupName ?: return
         val membersList = payload.members ?: return
-        // Sender becomes the creator (admin) on the recipient's view.
-        val createdBy = contact.contactFingerprint
         persistence.saveGroup(
             groupId = groupId,
             groupName = groupName,
-            createdByFingerprint = createdBy,
+            createdByFingerprint = senderFingerprint,
             isAdmin = false,
         )
         for (m in membersList) {

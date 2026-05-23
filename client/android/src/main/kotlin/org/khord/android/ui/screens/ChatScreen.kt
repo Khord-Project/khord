@@ -1,8 +1,6 @@
 package org.khord.android.ui.screens
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -45,7 +42,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavController
 import org.khord.shared.protocol.orchestrator.MessageEntry
-import org.khord.android.ui.theme.LocalKhordChatColors
 import org.khord.android.ui.viewmodel.ChatViewModel
 import org.khord.android.util.TimestampFormat
 
@@ -294,7 +290,12 @@ private fun MessageRow(
             )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrange) {
-            MessageBubble(msg, onEdit = onEdit)
+            MessageBubble(
+                body = msg.body,
+                isSent = msg.direction == MessageEntry.Direction.SENT,
+                messageUuid = msg.messageUuid,
+                onEdit = onEdit,
+            )
         }
         // Timestamp + optional (edited) tag on the same line. The
         // tag goes after the time, in the same muted style.
@@ -309,65 +310,7 @@ private fun MessageRow(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun MessageBubble(
-    msg: MessageEntry,
-    onEdit: (uuid: String, body: String) -> Unit,
-) {
-    val isSent = msg.direction == MessageEntry.Direction.SENT
-    val chat = LocalKhordChatColors.current
-    val bg = if (isSent) chat.sentBubble else chat.receivedBubble
-    val fg = if (isSent) chat.sentText else chat.receivedText
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var menuOpen by remember { mutableStateOf(false) }
-    // Edit is only meaningful for messages we sent that carry a UUID
-    // (pre-alpha.14 messages are un-editable because we can't
-    // identify them on the receiver side).
-    val canEdit = isSent && msg.messageUuid != null
-    Box(
-        modifier = Modifier
-            .widthIn(max = 280.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(bg)
-            .combinedClickable(
-                onClick = {},
-                onLongClick = { menuOpen = true },
-            )
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        Text(msg.body, color = fg, style = MaterialTheme.typography.bodyMedium)
-        androidx.compose.material3.DropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-        ) {
-            androidx.compose.material3.DropdownMenuItem(
-                text = { Text("Copy") },
-                onClick = {
-                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                    cm.setPrimaryClip(
-                        android.content.ClipData.newPlainText("Khord message", msg.body),
-                    )
-                    menuOpen = false
-                    // Android 13+ shows its own copy toast; on older
-                    // versions we don't surface one to avoid noise.
-                    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
-                        android.widget.Toast.makeText(
-                            context, "Copied", android.widget.Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                },
-            )
-            if (canEdit) {
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("Edit") },
-                    onClick = {
-                        menuOpen = false
-                        onEdit(msg.messageUuid!!, msg.body)
-                    },
-                )
-            }
-        }
-    }
-}
+// MessageBubble — shared between ChatScreen and GroupChatScreen, lives
+// in MessageBubble.kt. URL linkify + long-press Copy + (alpha.14+) Edit
+// are handled there. Pass `messageUuid` + `onEdit` so the bubble can
+// expose Edit on sent messages that carry a UUID.

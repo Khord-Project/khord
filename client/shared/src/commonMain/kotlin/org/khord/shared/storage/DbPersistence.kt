@@ -125,16 +125,27 @@ internal class DbPersistence(
         displayName: String,
         status: ContactStatus,
     ) {
-        db.contactQueries.upsertContact(
-            fingerprint = qr.fingerprint,
-            ed25519_public = identityKeyBase64ToBytes(qr.identityKey),
-            key_server_url = qr.keyServer,
-            relay_server_url = qr.relayServer,
-            contact_mailbox = qr.relayMailbox,
-            stored_at = now(),
-            display_name = displayName,
-            status = status.wireValue(),
-        )
+        // Preserve any pending_payload across re-upserts. INSERT OR
+        // REPLACE nulls every column, so we read the current value
+        // first and pass it back in. Only [setContactPendingPayload]
+        // is allowed to mutate that field directly.
+        db.transaction {
+            val keepPayload = db.contactQueries
+                .selectContactByFingerprint(qr.fingerprint)
+                .executeAsOneOrNull()
+                ?.pending_payload
+            db.contactQueries.upsertContact(
+                fingerprint = qr.fingerprint,
+                ed25519_public = identityKeyBase64ToBytes(qr.identityKey),
+                key_server_url = qr.keyServer,
+                relay_server_url = qr.relayServer,
+                contact_mailbox = qr.relayMailbox,
+                stored_at = now(),
+                display_name = displayName,
+                status = status.wireValue(),
+                pending_payload = keepPayload,
+            )
+        }
     }
 
     override suspend fun loadContact(fingerprint: String): ContactInfo? {
@@ -145,6 +156,7 @@ internal class DbPersistence(
                          row.relay_server_url, row.contact_mailbox),
             displayName = row.display_name,
             status = ContactStatus.fromWire(row.status),
+            pendingPayload = row.pending_payload,
         )
     }
 
@@ -155,6 +167,7 @@ internal class DbPersistence(
                              it.relay_server_url, it.contact_mailbox),
                 displayName = it.display_name,
                 status = ContactStatus.fromWire(it.status),
+                pendingPayload = it.pending_payload,
             )
         }
 
@@ -165,6 +178,7 @@ internal class DbPersistence(
                              it.relay_server_url, it.contact_mailbox),
                 displayName = it.display_name,
                 status = ContactStatus.fromWire(it.status),
+                pendingPayload = it.pending_payload,
             )
         }
 
@@ -174,6 +188,10 @@ internal class DbPersistence(
 
     override suspend fun setContactStatus(fingerprint: String, status: ContactStatus) {
         db.contactQueries.setContactStatus(status.wireValue(), fingerprint)
+    }
+
+    override suspend fun setContactPendingPayload(fingerprint: String, payload: String?) {
+        db.contactQueries.setContactPendingPayload(payload, fingerprint)
     }
 
     override suspend fun deleteContact(fingerprint: String) {

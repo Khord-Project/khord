@@ -58,7 +58,10 @@ internal class InMemoryPersistence : Persistence {
         displayName: String,
         status: ContactStatus,
     ) {
-        contacts[qr.fingerprint] = ContactInfo(qr, displayName, status)
+        // Preserve any pending_payload across re-upserts — only
+        // setContactPendingPayload is allowed to mutate that field.
+        val keepPayload = contacts[qr.fingerprint]?.pendingPayload
+        contacts[qr.fingerprint] = ContactInfo(qr, displayName, status, keepPayload)
     }
     override suspend fun loadContact(fingerprint: String): ContactInfo? = contacts[fingerprint]
     override suspend fun loadAllContacts(): List<ContactInfo> = contacts.values.toList()
@@ -69,6 +72,12 @@ internal class InMemoryPersistence : Persistence {
     }
     override suspend fun setContactStatus(fingerprint: String, status: ContactStatus) {
         contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(status = status) }
+    }
+
+    override suspend fun setContactPendingPayload(fingerprint: String, payload: String?) {
+        contacts[fingerprint]?.let {
+            contacts[fingerprint] = it.copy(pendingPayload = payload)
+        }
     }
 
     override suspend fun deleteContact(fingerprint: String) {
