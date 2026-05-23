@@ -2,6 +2,8 @@ package org.khord.android.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -89,7 +91,11 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
             }
         } else {
             Column(
-                modifier = Modifier.padding(padding).fillMaxSize().padding(20.dp),
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text("Identity", style = MaterialTheme.typography.titleMedium)
