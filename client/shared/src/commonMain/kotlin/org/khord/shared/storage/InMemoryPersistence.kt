@@ -128,6 +128,7 @@ internal class InMemoryPersistence : Persistence {
         direction: MessageDirection,
         body: String,
         timestamp: String,
+        messageUuid: String?,
     ) {
         val msg = StoredMessage(
             id = nextMessageId++,
@@ -135,12 +136,39 @@ internal class InMemoryPersistence : Persistence {
             body = body,
             timestamp = timestamp,
             storedAt = Clock.System.now().toString(),
+            messageUuid = messageUuid,
+            edited = false,
         )
         messages += contactFingerprint to msg
     }
 
     override suspend fun loadMessages(contactFingerprint: String): List<StoredMessage> =
         messages.filter { it.first == contactFingerprint }.map { it.second }.sortedBy { it.id }
+
+    override suspend fun findMessageByUuid(messageUuid: String): MessageLookup? {
+        if (messageUuid.isEmpty()) return null
+        for ((fp, msg) in messages) {
+            if (msg.messageUuid == messageUuid) {
+                return MessageLookup(
+                    id = msg.id,
+                    contactFingerprint = fp,
+                    direction = msg.direction,
+                    messageUuid = messageUuid,
+                )
+            }
+        }
+        return null
+    }
+
+    override suspend fun updateMessageBodyByUuid(messageUuid: String, newBody: String) {
+        for (i in messages.indices) {
+            val (fp, msg) = messages[i]
+            if (msg.messageUuid == messageUuid) {
+                messages[i] = fp to msg.copy(body = newBody, edited = true)
+                return
+            }
+        }
+    }
 
     // ── Groups (ADR 023) ────────────────────────────────────────────────────
 
@@ -199,6 +227,7 @@ internal class InMemoryPersistence : Persistence {
         body: String,
         timestamp: String,
         direction: MessageDirection,
+        messageUuid: String?,
     ) {
         val msg = GroupMessageRecord(
             id = nextGroupMessageId++,
@@ -208,12 +237,39 @@ internal class InMemoryPersistence : Persistence {
             timestamp = timestamp,
             direction = direction,
             storedAt = Clock.System.now().toString(),
+            messageUuid = messageUuid,
+            edited = false,
         )
         groupMessages += groupId to msg
     }
 
     override suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord> =
         groupMessages.filter { it.first == groupId }.map { it.second }.sortedBy { it.id }
+
+    override suspend fun findGroupMessageByUuid(messageUuid: String): GroupMessageLookup? {
+        if (messageUuid.isEmpty()) return null
+        for ((gid, msg) in groupMessages) {
+            if (msg.messageUuid == messageUuid) {
+                return GroupMessageLookup(
+                    id = msg.id,
+                    groupId = gid,
+                    senderFingerprint = msg.senderFingerprint,
+                    messageUuid = messageUuid,
+                )
+            }
+        }
+        return null
+    }
+
+    override suspend fun updateGroupMessageBodyByUuid(messageUuid: String, newBody: String) {
+        for (i in groupMessages.indices) {
+            val (gid, msg) = groupMessages[i]
+            if (msg.messageUuid == messageUuid) {
+                groupMessages[i] = gid to msg.copy(body = newBody, edited = true)
+                return
+            }
+        }
+    }
 
     override suspend fun saveKeyServerToken(token: String, expiresAt: String) {
         keyServerToken = KeyServerTokenRecord(token, expiresAt)

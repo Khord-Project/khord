@@ -265,11 +265,13 @@ class Messaging internal constructor(
             for (m in fetched) {
                 val envelope = decodeEnvelope(Base64Std.decode(m.blob))
                 if (envelope !is WireEnvelope.X3dhInitial) continue
-                val (session, text) = receiveInitialBlobInternal(
+                val initial = receiveInitialBlobInternal(
                     myInboundMailbox = mailboxId,
                     bearerTokenForMailbox = token,
                     envelope = envelope,
                 )
+                val session = initial.session
+                val text = initial.text
                 results += NewContact(session, text)
                 toClear += mailboxId
                 // Ack the initial so subsequent receiveMessages on this contact
@@ -284,6 +286,7 @@ class Messaging internal constructor(
                     direction = org.khord.shared.storage.MessageDirection.RECEIVED,
                     body = text,
                     timestamp = kotlinx.datetime.Clock.System.now().toString(),
+                    messageUuid = initial.messageUuid,
                 )
                 break
             }
@@ -398,6 +401,144 @@ class Messaging internal constructor(
                 ?.copy(pendingPayload = null)
                 ?: contactsByFingerprint[fingerprint]!!
         }
+    }
+
+    /**
+     * Edit a previously-sent message by UUID. Looks up the message
+     * locally to determine whether it was 1:1 or group, verifies it
+     * was sent by us, fans out a "message_edit" payload through the
+     * appropriate pairwise channel(s), and updates the local copy in
+     * place. Receivers persist the new body and flag the row as
+     * edited so the UI can show "(edited)".
+     *
+     * Returns true on success, false if the UUID didn't match
+     * anything OR the matched message wasn't sent by us (anti-spoof:
+     * we don't fan out edits for messages we didn't author).
+     *
+     * Best-effort: a recipient who is offline at edit time will see
+     * the original body until the next time they poll/push and the
+     * edit envelope is delivered. ADR 026 documents the trade-off.
+     */
+    suspend fun editMessage(messageUuid: String, newBody: String): Boolean {
+        checkAlive()
+        require(messageUuid.isNotBlank()) { "messageUuid must be non-blank" }
+        require(newBody.isNotBlank()) { "newBody must be non-blank" }
+
+        // Try 1:1 path first — most common.
+        val oneToOne = persistence.findMessageByUuid(messageUuid)
+        if (oneToOne != null) {
+            if (oneToOne.direction != org.khord.shared.storage.MessageDirection.SENT) {
+                return false   // anti-spoof: can only edit messages we sent
+            }
+            val contact = sessionForFingerprint(oneToOne.contactFingerprint)
+                ?: return false
+            val payload = InnerPayload(
+                type = "message_edit",
+                timestamp = Clock.System.now().toString(),
+                messageUuid = messageUuid,
+                newBody = newBody,
+                replyInfo = ReplyInfo(
+                    mailbox = contact.inboundMailboxId,
+                    relayServer = relayServerUrl,
+                    keyServer = keyServerUrl,
+                    fingerprint = identity.fingerprint,
+                    displayName = displayName,
+                ),
+            )
+            sendRatchetPayload(contact, payload)
+            persistence.updateMessageBodyByUuid(messageUuid, newBody)
+            return true
+        }
+
+        // Fall through: group message?
+        val group = persistence.findGroupMessageByUuid(messageUuid) ?: return false
+        if (group.senderFingerprint != identity.fingerprint) return false
+        val members = persistence.loadGroupMembers(group.groupId)
+            .filter { it.fingerprint != identity.fingerprint }
+        val timestamp = Clock.System.now().toString()
+        for (m in members) {
+            val c = sessionForFingerprint(m.fingerprint) ?: continue
+            sendGroupInnerPayload(
+                contact = c,
+                payload = InnerPayload(
+                    type = "message_edit",
+                    timestamp = timestamp,
+                    messageUuid = messageUuid,
+                    newBody = newBody,
+                    replyInfo = myReplyInfo(c.inboundMailboxId),
+                    groupId = group.groupId,
+                ),
+            )
+        }
+        persistence.updateGroupMessageBodyByUuid(messageUuid, newBody)
+        return true
+    }
+
+    /**
+     * Inbound side of [editMessage]. The pairwise channel already
+     * proved sender authenticity (Double Ratchet AEAD); we still
+     * verify the edit's claimed UUID belongs to a message we
+     * remember as having come from THIS sender. Edits for messages
+     * we sent (i.e. arriving on the "wrong" direction) are
+     * silently ignored; same for unknown UUIDs.
+     */
+    private suspend fun handleMessageEdit(
+        contact: ContactSession,
+        payload: InnerPayload,
+    ) {
+        val uuid = payload.messageUuid ?: return
+        val newBody = payload.newBody ?: return
+
+        val oneToOne = persistence.findMessageByUuid(uuid)
+        if (oneToOne != null) {
+            // Must be a RECEIVED message (we got it from the sender),
+            // and the contact whose session delivered the edit must
+            // be the same contact we received the original from.
+            if (oneToOne.direction != org.khord.shared.storage.MessageDirection.RECEIVED) {
+                return
+            }
+            if (oneToOne.contactFingerprint != contact.contactFingerprint) {
+                return
+            }
+            persistence.updateMessageBodyByUuid(uuid, newBody)
+            return
+        }
+
+        val group = persistence.findGroupMessageByUuid(uuid) ?: return
+        // Sender of the edit must match the sender of the original
+        // group message — otherwise it's an attempt to edit someone
+        // else's group message, which we never honour.
+        if (group.senderFingerprint != contact.contactFingerprint) return
+        persistence.updateGroupMessageBodyByUuid(uuid, newBody)
+    }
+
+    /**
+     * Shared body-of-sendMessage used by [editMessage]: encrypt one
+     * InnerPayload through the contact's ratchet and POST to their
+     * relay. No local persistence — the caller decides what (if
+     * anything) to record locally for this payload type.
+     */
+    private suspend fun sendRatchetPayload(
+        contact: ContactSession,
+        payload: InnerPayload,
+    ) {
+        val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
+            .encodeToByteArray()
+        val encrypted = contact.session.encrypt(plaintextBytes)
+        val envelope = WireEnvelope.Ratchet(
+            header = Base64Std.encode(encrypted.headerBytes),
+            ciphertext = Base64Std.encode(encrypted.ciphertext),
+        )
+        val envelopeBytes = KhordJson
+            .encodeToString(WireEnvelope.serializer(), envelope as WireEnvelope)
+            .encodeToByteArray()
+        val rs = if (contact.outboundRelayServer == relayServerUrl) {
+            rsClient
+        } else {
+            RelayServerClient(http, contact.outboundRelayServer)
+        }
+        rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
+        persistSession(contact)
     }
 
     /** Update my own display name (persisted; used in subsequent reply_info). */
@@ -517,10 +658,12 @@ class Messaging internal constructor(
         // unknown fingerprint" error would force a bidirectional QR scan.
         val session = Session.fromInitiator(initOut, cryptoBundle.signedPreKey.publicKey)
         val firstMessageTimestamp = Clock.System.now().toString()
+        val firstMessageUuid = newMessageUuid()
         val payload = InnerPayload(
             type = "text",
             timestamp = firstMessageTimestamp,
             body = firstMessage,
+            messageUuid = firstMessageUuid,
             replyInfo = ReplyInfo(
                 mailbox = myInboundMailboxId,
                 relayServer = relayServerUrl,
@@ -572,6 +715,7 @@ class Messaging internal constructor(
             direction = org.khord.shared.storage.MessageDirection.SENT,
             body = firstMessage,
             timestamp = firstMessageTimestamp,
+            messageUuid = firstMessageUuid,
         )
         return contactSession
     }
@@ -588,7 +732,7 @@ class Messaging internal constructor(
         myInboundMailbox: String,
         bearerTokenForMailbox: String,
         envelope: WireEnvelope.X3dhInitial,
-    ): Pair<ContactSession, String> {
+    ): InitialReceiveResult {
         val ikA = Base64Std.decode(envelope.ikA)
         val ekA = Base64Std.decode(envelope.ekA)
         val initiatorFp = identityFingerprint(ikA)
@@ -698,13 +842,18 @@ class Messaging internal constructor(
         }
         sessionsByInboundMailbox[myInboundMailbox] = contactSession
         persistSession(contactSession)
-        return contactSession to text
+        return InitialReceiveResult(contactSession, text, payload.messageUuid)
     }
 
     /** Send a text message to the contact this session is bound to. */
     suspend fun sendMessage(contact: ContactSession, text: String): Long {
         checkAlive()
         val timestamp = Clock.System.now().toString()
+        // Stamp every outgoing message with a fresh UUID so the
+        // recipient can persist the same identifier and a later
+        // "message_edit" payload can target this specific message
+        // by reference (rather than fragile timestamp+body matching).
+        val messageUuid = newMessageUuid()
         // Always include reply_info on outbound ratchet messages too — costs
         // ~150 bytes per message and gives us self-healing display-name and
         // server-URL updates without adding a separate "I-renamed-myself"
@@ -713,6 +862,7 @@ class Messaging internal constructor(
             type = "text",
             timestamp = timestamp,
             body = text,
+            messageUuid = messageUuid,
             replyInfo = ReplyInfo(
                 mailbox = contact.inboundMailboxId,
                 relayServer = relayServerUrl,
@@ -746,6 +896,7 @@ class Messaging internal constructor(
             direction = org.khord.shared.storage.MessageDirection.SENT,
             body = text,
             timestamp = timestamp,
+            messageUuid = messageUuid,
         )
         persistSession(contact)
 
@@ -849,6 +1000,7 @@ class Messaging internal constructor(
                 "group_member_added" -> handleGroupMemberAdded(currentContact, payload)
                 "group_member_left" -> handleGroupMemberLeft(currentContact, payload)
                 "group_name_changed" -> handleGroupNameChanged(currentContact, payload)
+                "message_edit" -> handleMessageEdit(currentContact, payload)
                 else -> {
                     // Legacy one-to-one text path. decodeInnerPayloadText
                     // throws on unknown types, which is the documented
@@ -860,6 +1012,7 @@ class Messaging internal constructor(
                         direction = org.khord.shared.storage.MessageDirection.RECEIVED,
                         body = text,
                         timestamp = payload.timestamp,
+                        messageUuid = payload.messageUuid,
                     )
                 }
             }
@@ -968,6 +1121,11 @@ class Messaging internal constructor(
             .filter { it.fingerprint != identity.fingerprint }
 
         val timestamp = Clock.System.now().toString()
+        // Single UUID stamped on every fan-out copy — receiving members
+        // store the same identifier, so a later message_edit fanout
+        // (referencing this UUID) can be applied uniformly across all
+        // recipients.
+        val messageUuid = newMessageUuid()
         for (m in members) {
             val contact = sessionForFingerprint(m.fingerprint) ?: continue
             sendGroupInnerPayload(
@@ -976,6 +1134,7 @@ class Messaging internal constructor(
                     type = "group_message",
                     timestamp = timestamp,
                     body = text,
+                    messageUuid = messageUuid,
                     replyInfo = myReplyInfo(contact.inboundMailboxId),
                     groupId = groupId,
                 ),
@@ -989,6 +1148,7 @@ class Messaging internal constructor(
             body = text,
             timestamp = timestamp,
             direction = org.khord.shared.storage.MessageDirection.SENT,
+            messageUuid = messageUuid,
         )
         // Read-mod-write: groupName access not needed here, but keep
         // `group` local in case future logic on this branch needs it.
@@ -1233,6 +1393,7 @@ class Messaging internal constructor(
             body = body,
             timestamp = payload.timestamp,
             direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+            messageUuid = payload.messageUuid,
         )
         // Also keep the per-member display_name in sync — fresh info.
         if (senderName.isNotEmpty()) {
@@ -1289,9 +1450,36 @@ class Messaging internal constructor(
      * probability. `Random.nextBytes` is good enough — collisions across
      * 16 bytes are astronomically unlikely.
      */
+    /**
+     * Return type of [receiveInitialBlobInternal] — the new session,
+     * the decoded first text, and the sender-issued UUID of that
+     * first message (null when the sender is pre-alpha.14).
+     */
+    private data class InitialReceiveResult(
+        val session: ContactSession,
+        val text: String,
+        val messageUuid: String?,
+    )
+
     private fun newGroupId(): String {
         val bytes = kotlin.random.Random.nextBytes(16)
         return bytes.joinToString("") { ((it.toInt() and 0xff)).toString(16).padStart(2, '0') }
+    }
+
+    /**
+     * Per-message UUID stamped on every outgoing alpha.14+ text and
+     * group_message. 128 bits of random — collision-resistant under
+     * any realistic load. Hex-encoded with dashes (RFC 4122-ish but
+     * without the version + variant bits since we don't depend on
+     * that semantics anywhere). Same generator on Android and JVM.
+     */
+    private fun newMessageUuid(): String {
+        val bytes = kotlin.random.Random.nextBytes(16)
+        val hex = bytes.joinToString("") {
+            ((it.toInt() and 0xff)).toString(16).padStart(2, '0')
+        }
+        return "${hex.substring(0, 8)}-${hex.substring(8, 12)}-" +
+            "${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}"
     }
 
     // ─── internals ────────────────────────────────────────────────────────
@@ -1502,6 +1690,7 @@ class Messaging internal constructor(
             direction = org.khord.shared.storage.MessageDirection.RECEIVED,
             body = text,
             timestamp = payload.timestamp,
+            messageUuid = payload.messageUuid,
         )
         persistSession(newContact)
         return newContact to text
@@ -1542,6 +1731,8 @@ class Messaging internal constructor(
                     MessageEntry.Direction.SENT else MessageEntry.Direction.RECEIVED,
                 body = it.body,
                 timestamp = it.timestamp,
+                messageUuid = it.messageUuid,
+                edited = it.edited,
             )
         }
     }
@@ -1723,6 +1914,18 @@ data class MessageEntry(
     val direction: Direction,
     val body: String,
     val timestamp: String,
+    /**
+     * Sender-issued UUID for this message. Null on pre-alpha.14
+     * messages (those existed before the column was added and remain
+     * un-editable). Required to invoke [Messaging.editMessage].
+     */
+    val messageUuid: String? = null,
+    /**
+     * True if this message has been edited since it was originally
+     * sent. UI surfaces a small "(edited)" badge below the bubble
+     * when true.
+     */
+    val edited: Boolean = false,
 ) {
     enum class Direction { SENT, RECEIVED }
 }
@@ -1752,6 +1955,8 @@ data class GroupMessageEntry(
     val body: String,
     val timestamp: String,
     val direction: MessageEntry.Direction,
+    val messageUuid: String? = null,
+    val edited: Boolean = false,
 )
 
 internal fun org.khord.shared.storage.GroupRecord.toEntry(): GroupEntry =
@@ -1775,6 +1980,8 @@ internal fun org.khord.shared.storage.GroupMessageRecord.toEntry(): GroupMessage
         timestamp = timestamp,
         direction = if (direction == org.khord.shared.storage.MessageDirection.SENT)
             MessageEntry.Direction.SENT else MessageEntry.Direction.RECEIVED,
+        messageUuid = messageUuid,
+        edited = edited,
     )
 
 // Tiny helper: exposed only so Messaging can validate QR payload bindings without

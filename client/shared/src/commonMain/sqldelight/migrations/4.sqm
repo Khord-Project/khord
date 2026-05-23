@@ -1,4 +1,4 @@
--- Migration from schema version 4 to 5.
+-- Migration from schema version 3 to 4.
 -- Adds contact.pending_payload to store a deferred protocol payload
 -- (typically a group_invite) that arrived from a still-pending
 -- contact, to be processed when the user accepts them. JSON-serialised

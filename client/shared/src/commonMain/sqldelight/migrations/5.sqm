@@ -1,0 +1,19 @@
+-- Migration from schema version 4 to 5.
+--
+-- Adds message_uuid + edited columns to both per-contact `message`
+-- and per-group `group_message` tables. UUIDs identify a message
+-- across sender + receiver so the new "message_edit" payload type
+-- can target a specific historical message by reference rather
+-- than (e.g.) timestamp + body, which would be brittle.
+--
+-- All new columns are nullable / default-0 so existing alpha.13
+-- rows migrate transparently. Pre-alpha.14 messages remain
+-- un-editable (no UUID to reference them by) — a deliberate
+-- trade-off that avoids needing to back-fill UUIDs.
+ALTER TABLE message ADD COLUMN message_uuid TEXT;
+ALTER TABLE message ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX message_by_uuid ON message(message_uuid);
+
+ALTER TABLE group_message ADD COLUMN message_uuid TEXT;
+ALTER TABLE group_message ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX group_message_by_uuid ON group_message(message_uuid);

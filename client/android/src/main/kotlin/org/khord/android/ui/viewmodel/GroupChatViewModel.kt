@@ -97,6 +97,28 @@ class GroupChatViewModel(
         pollJob = null
     }
 
+    /**
+     * Edit a previously-sent group message in place. Fans the edit
+     * out to every member with an active session — recipients
+     * offline at the time of edit see the original until their next
+     * poll/push delivery.
+     */
+    fun edit(messageUuid: String, newBody: String) {
+        val trimmed = newBody.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                runCatching {
+                    val messaging = AppContainer.messaging ?: error("not initialised")
+                    messaging.editMessage(messageUuid, trimmed)
+                    reloadLockedInternal()
+                }.onFailure { e ->
+                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                }
+            }
+        }
+    }
+
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return

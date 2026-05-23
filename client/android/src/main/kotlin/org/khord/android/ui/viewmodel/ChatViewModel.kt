@@ -126,6 +126,35 @@ class ChatViewModel(
         pollJob = null
     }
 
+    /**
+     * Edit a previously-sent message in place. Best-effort fan-out:
+     * the local copy updates regardless of network outcome (the
+     * shared Messaging.editMessage applies persistence + send under
+     * the same mutex), so the user sees the edit immediately. Other
+     * recipients see the original until the edit envelope reaches
+     * them.
+     */
+    fun edit(messageUuid: String, newBody: String) {
+        val trimmed = newBody.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                runCatching {
+                    val messaging = AppContainer.messaging ?: error("not initialised")
+                    messaging.editMessage(messageUuid, trimmed)
+                    reloadHistoryLocked()
+                }.onFailure { e ->
+                    _state.update {
+                        it.copy(
+                            error = e.message ?: e::class.simpleName,
+                            errorCause = e,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return

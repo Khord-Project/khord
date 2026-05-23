@@ -1,8 +1,6 @@
 package org.khord.android.ui.screens
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -45,7 +42,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavController
 import org.khord.shared.protocol.orchestrator.MessageEntry
-import org.khord.android.ui.theme.LocalKhordChatColors
 import org.khord.android.ui.viewmodel.ChatViewModel
 import org.khord.android.util.TimestampFormat
 
@@ -111,6 +107,13 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
             )
         },
     ) { padding ->
+        // Edit-mode state lives at the screen level (not inside the
+        // ViewModel) — purely a UI concern. When non-null we're
+        // editing the message with this UUID; the input pre-fills
+        // with the current body, a small banner above the input
+        // shows "Editing message" with an X to cancel, and the send
+        // button submits an edit instead of a new message.
+        var editingUuid by remember { mutableStateOf<String?>(null) }
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -127,6 +130,10 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     MessageRow(
                         msg = msg,
                         senderName = state.contactDisplayName,
+                        onEdit = { uuid, body ->
+                            editingUuid = uuid
+                            draft = body
+                        },
                     )
                 }
             }
@@ -163,6 +170,28 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
             if (unavailable) {
                 UnavailableBanner()
             }
+            // Edit-mode banner — sits between the message list and
+            // the composer. Cancel reverts to fresh-message mode
+            // and clears the pre-filled draft.
+            if (editingUuid != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Editing message",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    androidx.compose.material3.TextButton(onClick = {
+                        editingUuid = null
+                        draft = ""
+                    }) { Text("Cancel") }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -174,6 +203,7 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     placeholder = {
                         Text(
                             if (unavailable) "Contact unavailable"
+                            else if (editingUuid != null) "Edit message…"
                             else "Type a message"
                         )
                     },
@@ -184,10 +214,18 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                 Button(
                     enabled = !state.sending && !unavailable && draft.isNotBlank(),
                     onClick = {
-                        vm.send(draft)
+                        val uuid = editingUuid
+                        if (uuid != null) {
+                            vm.edit(uuid, draft)
+                            editingUuid = null
+                        } else {
+                            vm.send(draft)
+                        }
                         draft = ""
                     },
-                ) { Text("Send") }
+                ) {
+                    Text(if (editingUuid != null) "Save" else "Send")
+                }
             }
         }
     }
@@ -232,7 +270,11 @@ private fun DateSeparator(iso: String) {
 }
 
 @Composable
-private fun MessageRow(msg: MessageEntry, senderName: String?) {
+private fun MessageRow(
+    msg: MessageEntry,
+    senderName: String?,
+    onEdit: (uuid: String, body: String) -> Unit,
+) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val arrange = if (isSent) Arrangement.End else Arrangement.Start
     val align = if (isSent) Alignment.End else Alignment.Start
@@ -251,10 +293,16 @@ private fun MessageRow(msg: MessageEntry, senderName: String?) {
             MessageBubble(
                 body = msg.body,
                 isSent = msg.direction == MessageEntry.Direction.SENT,
+                messageUuid = msg.messageUuid,
+                onEdit = onEdit,
             )
         }
+        // Timestamp + optional (edited) tag on the same line. The
+        // tag goes after the time, in the same muted style.
+        val timestampLabel = TimestampFormat.formatMessageTime(msg.timestamp)
+        val full = if (msg.edited) "$timestampLabel · (edited)" else timestampLabel
         Text(
-            TimestampFormat.formatMessageTime(msg.timestamp),
+            full,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
@@ -262,7 +310,7 @@ private fun MessageRow(msg: MessageEntry, senderName: String?) {
     }
 }
 
-// MessageBubble — shared between ChatScreen and GroupChatScreen, now
-// lives in MessageBubble.kt. Use `MessageBubble(body, isSent)` from
-// the row composable below; URL linkify + long-press copy are handled
-// there.
+// MessageBubble — shared between ChatScreen and GroupChatScreen, lives
+// in MessageBubble.kt. URL linkify + long-press Copy + (alpha.14+) Edit
+// are handled there. Pass `messageUuid` + `onEdit` so the bubble can
+// expose Edit on sent messages that carry a UUID.

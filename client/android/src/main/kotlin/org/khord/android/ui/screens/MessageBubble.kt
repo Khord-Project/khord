@@ -37,7 +37,7 @@ import org.khord.android.ui.theme.LocalKhordChatColors
 
 /**
  * Shared message-bubble composable used by both [ChatScreen] and
- * [GroupChatScreen]. Two responsibilities the original inline bubbles
+ * [GroupChatScreen]. Three responsibilities the original inline bubbles
  * each had to repeat:
  *
  *   1. **URL auto-linkify.** Body text is scanned for http/https/www
@@ -48,19 +48,24 @@ import org.khord.android.ui.theme.LocalKhordChatColors
  *      Intent.ACTION_VIEW, which opens whichever browser the user has
  *      configured.
  *   2. **Long-press → Copy.** Bubble accepts long-press via
- *      `combinedClickable`; opens a [DropdownMenu] with a single
- *      Copy entry that writes the body to the clipboard via
+ *      `combinedClickable`; opens a [DropdownMenu] with a Copy entry
+ *      that writes the body to the clipboard via
  *      [ClipboardManager.setPrimaryClip].
+ *   3. **Long-press → Edit** (alpha.14+, ADR 026). When the bubble
+ *      is for a message we SENT and we know its [messageUuid], the
+ *      menu also includes Edit; tapping it fires [onEdit] with the
+ *      UUID + current body so the host screen can enter edit-mode.
+ *      Pre-alpha.14 messages don't carry a UUID and stay un-editable.
  *
- * Both behaviours were previously only on ChatScreen, with
- * GroupChatScreen rendering a raw [Text] inside a [Box]. Extracted
- * here so future enhancements (Edit, Reply, Reactions) land once.
+ * Future enhancements (Reply, Reactions) land once here.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(
     body: String,
     isSent: Boolean,
+    messageUuid: String? = null,
+    onEdit: ((uuid: String, body: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val chat = LocalKhordChatColors.current
@@ -68,6 +73,7 @@ fun MessageBubble(
     val fg: Color = if (isSent) chat.sentText else chat.receivedText
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
+    val canEdit = isSent && messageUuid != null && onEdit != null
 
     Box(
         modifier = modifier
@@ -102,6 +108,15 @@ fun MessageBubble(
                     }
                 },
             )
+            if (canEdit) {
+                DropdownMenuItem(
+                    text = { Text("Edit") },
+                    onClick = {
+                        menuOpen = false
+                        onEdit!!(messageUuid!!, body)
+                    },
+                )
+            }
         }
     }
 }

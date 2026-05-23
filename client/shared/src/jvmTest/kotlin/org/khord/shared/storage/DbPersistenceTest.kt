@@ -287,6 +287,70 @@ class DbPersistenceTest {
     }
 
     @Test
+    fun message_uuid_round_trip_and_edit_via_uuid() = runTest {
+        val p = openTestDb()
+        try {
+            val fp = "c".repeat(64)
+            p.saveContact(QrPayload(
+                identityKey = "AAAA", fingerprint = fp,
+                keyServer = "x", relayServer = "y",
+                relayMailbox = "mailbox-id-22-chars-cccc",
+            ))
+            val uuid = "01234567-89ab-cdef-0123-456789abcdef"
+            p.saveMessage(fp, MessageDirection.SENT, "no uuid", "ts1", messageUuid = null)
+            p.saveMessage(fp, MessageDirection.SENT, "original", "ts2", messageUuid = uuid)
+
+            val before = p.loadMessages(fp)
+            assertEquals(2, before.size)
+            assertEquals(null, before[0].messageUuid)
+            assertEquals(uuid, before[1].messageUuid)
+            assertEquals(false, before[1].edited)
+
+            val lookup = p.findMessageByUuid(uuid)
+            assertEquals(fp, lookup?.contactFingerprint)
+            assertEquals(MessageDirection.SENT, lookup?.direction)
+
+            p.updateMessageBodyByUuid(uuid, "edited via uuid")
+
+            val after = p.loadMessages(fp)
+            // Original row (no uuid) is untouched.
+            assertEquals("no uuid", after[0].body)
+            assertEquals(false, after[0].edited)
+            // Edited row reflects the new body + edited=true.
+            assertEquals("edited via uuid", after[1].body)
+            assertEquals(true, after[1].edited)
+        } finally {
+            p.close()
+        }
+    }
+
+    @Test
+    fun group_message_uuid_round_trip_and_edit_via_uuid() = runTest {
+        val p = openTestDb()
+        try {
+            val sender = "d".repeat(64)
+            val groupId = "1234".repeat(8)
+            val uuid = "fedcba98-7654-3210-fedc-ba9876543210"
+            p.saveGroup(groupId, "G", createdByFingerprint = sender, isAdmin = true)
+            p.saveGroupMessage(
+                groupId, sender, "Alice", "group hi", "ts",
+                MessageDirection.SENT, messageUuid = uuid,
+            )
+            val lookup = p.findGroupMessageByUuid(uuid)
+            assertEquals(groupId, lookup?.groupId)
+            assertEquals(sender, lookup?.senderFingerprint)
+
+            p.updateGroupMessageBodyByUuid(uuid, "group edited")
+            val msgs = p.loadGroupMessages(groupId)
+            assertEquals(1, msgs.size)
+            assertEquals("group edited", msgs[0].body)
+            assertEquals(true, msgs[0].edited)
+        } finally {
+            p.close()
+        }
+    }
+
+    @Test
     fun messages_preserve_order_under_load() = runTest {
         val p = openTestDb()
         try {
