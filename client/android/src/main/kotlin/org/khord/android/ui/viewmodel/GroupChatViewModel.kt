@@ -156,7 +156,20 @@ class GroupChatViewModel(
         val messaging = AppContainer.messaging ?: return
         val group = messaging.groupSnapshot(groupId)
         val members = messaging.groupMembers(groupId)
-        val msgs = messaging.groupMessageHistory(groupId)
+        val msgs = messaging.groupMessageHistory(groupId).map { m ->
+            // Apply the local nickname override to sender labels:
+            // local_display_name ?? stored sender_display_name. Falls
+            // back to the stored name for senders who aren't direct
+            // contacts (you can share a group with someone you haven't
+            // added 1:1, per ADR 023 — contactDisplayName returns null
+            // for them and we keep the group-carried name).
+            val override = messaging.contactDisplayName(m.senderFingerprint)
+            if (override != null && override != m.senderDisplayName) {
+                m.copy(senderDisplayName = override)
+            } else {
+                m
+            }
+        }
         _state.update {
             it.copy(group = group, memberCount = members.size, messages = msgs)
         }

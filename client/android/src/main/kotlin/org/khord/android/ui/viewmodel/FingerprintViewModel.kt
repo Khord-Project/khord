@@ -37,7 +37,9 @@ class FingerprintViewModel(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    init {
+    init { refreshNameState() }
+
+    private fun refreshNameState() {
         viewModelScope.launch(Dispatchers.IO) {
             val messaging = AppContainer.messaging ?: return@launch
             _state.update {
@@ -46,6 +48,25 @@ class FingerprintViewModel(
                         ?: "",
                     myFingerprint = messaging.myFingerprint,
                     verified = messaging.isContactVerified(contactFingerprint),
+                )
+            }
+        }
+    }
+
+    /**
+     * Set (blank clears) the local nickname override for this contact.
+     * Refreshes the displayed name afterward so the title updates in
+     * place.
+     */
+    fun rename(newName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val messaging = AppContainer.messaging ?: return@launch
+            messaging.setContactLocalName(contactFingerprint, newName)
+            refreshNameState()
+            _state.update {
+                it.copy(
+                    justUpdated = if (newName.isBlank()) "Name reset"
+                                  else "Contact renamed",
                 )
             }
         }

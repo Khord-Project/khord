@@ -21,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,6 +56,7 @@ fun GroupInfoScreen(nav: NavController, groupId: String) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showAddPicker by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
+    var showRename by remember { mutableStateOf(false) }
 
     // After leaving, route the user back to the contact list — the
     // group route is now invalid (group row was deleted).
@@ -129,6 +131,11 @@ fun GroupInfoScreen(nav: NavController, groupId: String) {
             }
 
             if (state.group?.isAdmin == true) {
+                OutlinedButton(
+                    onClick = { showRename = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Rename group") }
+                Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = { showAddPicker = true },
                     modifier = Modifier.fillMaxWidth(),
@@ -143,6 +150,16 @@ fun GroupInfoScreen(nav: NavController, groupId: String) {
         }
     }
 
+    if (showRename) {
+        RenameGroupDialog(
+            currentName = state.group?.groupName ?: "",
+            onDismiss = { showRename = false },
+            onConfirm = { newName ->
+                showRename = false
+                vm.rename(newName)
+            },
+        )
+    }
     if (showAddPicker) {
         AddMemberDialog(
             candidates = state.addableContacts,
@@ -174,6 +191,36 @@ fun GroupInfoScreen(nav: NavController, groupId: String) {
             },
         )
     }
+}
+
+@Composable
+private fun RenameGroupDialog(
+    currentName: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(currentName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename group") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                label = { Text("Group name") },
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(text) },
+                enabled = text.isNotBlank() && text.trim() != currentName,
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

@@ -286,6 +286,33 @@ class InMemoryPersistenceTest {
     }
 
     @Test
+    fun local_display_name_override_round_trip_and_preserved_on_upsert() = runTest {
+        val p = InMemoryPersistence()
+        val fp = "n".repeat(64)
+        val qr = QrPayload(
+            identityKey = "AAAA", fingerprint = fp,
+            keyServer = "x", relayServer = "y",
+            relayMailbox = "m" + "0".repeat(21),
+        )
+        p.saveContact(qr, "Self-Reported Name")
+        assertNull(p.loadContact(fp)!!.localDisplayName)
+
+        // Set a local nickname.
+        p.setContactLocalName(fp, "My Nickname")
+        assertEquals("My Nickname", p.loadContact(fp)!!.localDisplayName)
+
+        // Re-upsert (e.g. fresh reply_info display name) must preserve
+        // the local override.
+        p.saveContact(qr, "Updated Self Name")
+        assertEquals("My Nickname", p.loadContact(fp)!!.localDisplayName)
+        assertEquals("Updated Self Name", p.loadContact(fp)!!.displayName)
+
+        // Blank clears back to null (reset to self-reported).
+        p.setContactLocalName(fp, "   ")
+        assertNull(p.loadContact(fp)!!.localDisplayName)
+    }
+
+    @Test
     fun panic_wipes_everything() = runTest {
         val p = InMemoryPersistence()
         val id = aliceIdentity()
