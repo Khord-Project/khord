@@ -94,6 +94,19 @@ internal interface Persistence {
     suspend fun setContactPendingPayload(fingerprint: String, payload: String?)
 
     /**
+     * Set / clear the local-only verified flag on a contact. Local
+     * trust decision — never transmitted, per-device. Cleared
+     * unconditionally by [Messaging.applyX3dhInitialReset] on any
+     * key change.
+     */
+    suspend fun setContactVerified(fingerprint: String, verified: Boolean)
+
+    /**
+     * Read the verified flag. False for unknown fingerprints.
+     */
+    suspend fun isContactVerified(fingerprint: String): Boolean
+
+    /**
      * Remove a contact and every record that depends on it: the
      * pairwise Double Ratchet session row, every persisted message,
      * and the contact row itself. The relay-side mailbox binding is
@@ -277,6 +290,11 @@ internal data class ContactInfo(
      * common case.
      */
     val pendingPayload: String? = null,
+    /**
+     * Local-only fingerprint verification flag. See Contact.sq's
+     * `verified` column for full semantics.
+     */
+    val verified: Boolean = false,
 )
 
 internal enum class ContactStatus {

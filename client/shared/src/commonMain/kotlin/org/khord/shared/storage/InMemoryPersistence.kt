@@ -58,10 +58,17 @@ internal class InMemoryPersistence : Persistence {
         displayName: String,
         status: ContactStatus,
     ) {
-        // Preserve any pending_payload across re-upserts — only
-        // setContactPendingPayload is allowed to mutate that field.
-        val keepPayload = contacts[qr.fingerprint]?.pendingPayload
-        contacts[qr.fingerprint] = ContactInfo(qr, displayName, status, keepPayload)
+        // Preserve any pending_payload + verified across re-upserts —
+        // setContactPendingPayload and setContactVerified are the only
+        // paths that mutate those fields directly.
+        val existing = contacts[qr.fingerprint]
+        contacts[qr.fingerprint] = ContactInfo(
+            qr = qr,
+            displayName = displayName,
+            status = status,
+            pendingPayload = existing?.pendingPayload,
+            verified = existing?.verified ?: false,
+        )
     }
     override suspend fun loadContact(fingerprint: String): ContactInfo? = contacts[fingerprint]
     override suspend fun loadAllContacts(): List<ContactInfo> = contacts.values.toList()
@@ -79,6 +86,15 @@ internal class InMemoryPersistence : Persistence {
             contacts[fingerprint] = it.copy(pendingPayload = payload)
         }
     }
+
+    override suspend fun setContactVerified(fingerprint: String, verified: Boolean) {
+        contacts[fingerprint]?.let {
+            contacts[fingerprint] = it.copy(verified = verified)
+        }
+    }
+
+    override suspend fun isContactVerified(fingerprint: String): Boolean =
+        contacts[fingerprint]?.verified == true
 
     override suspend fun deleteContact(fingerprint: String) {
         // Mirror the SQLDelight CASCADE behaviour by removing every

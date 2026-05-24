@@ -1,0 +1,16 @@
+-- Migration from schema version 5 to 6.
+--
+-- Adds contact.verified — a local-only "I have visually compared
+-- this contact's fingerprint with theirs and accept they are who
+-- they claim" flag. NOT a server-side concept; never transmitted;
+-- per-device. The fingerprint-verification flow (alpha.X) sets
+-- this; applyX3dhInitialReset clears it any time the contact's
+-- identity key changes, so a verified contact who recovers from
+-- seed phrase or whose key rotates loses the badge until the user
+-- re-verifies in person / out-of-band.
+--
+-- INTEGER (0/1) — SQLite's canonical boolean. Default 0 so every
+-- existing alpha.15 contact starts unverified, which is correct:
+-- nobody has run the comparison flow yet because the flow didn't
+-- exist before this migration.
+ALTER TABLE contact ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;

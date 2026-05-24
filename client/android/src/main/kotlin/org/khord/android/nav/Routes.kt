@@ -35,4 +35,10 @@ object Routes {
     fun groupChat(groupId: String): String = "group/$groupId"
     const val GROUP_INFO_PATTERN = "group/{groupId}/info"
     fun groupInfo(groupId: String): String = "group/$groupId/info"
+
+    // Fingerprint verification screen — shows the named contact's
+    // identity fingerprint + our own, with a Mark/Unmark button.
+    // Routed from ChatScreen header and GroupInfoScreen member rows.
+    const val FINGERPRINT_PATTERN = "contact/{fingerprint}/verify"
+    fun fingerprint(fingerprint: String): String = "contact/$fingerprint/verify"
 }

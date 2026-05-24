@@ -41,6 +41,14 @@ class ContactListViewModel : ViewModel() {
          * the user can see them locally.
          */
         val unavailable: Boolean = false,
+        /**
+         * True when the user has fingerprint-verified this contact.
+         * Drives the small checkmark badge next to the display name
+         * in the row. Only meaningful for [Kind.Contact]; groups
+         * deliberately do NOT show a verified badge (per-member
+         * verification UI is out of scope for the messenger row).
+         */
+        val verified: Boolean = false,
     ) {
         enum class Kind { Contact, Group }
 
@@ -176,6 +184,7 @@ class ContactListViewModel : ViewModel() {
                             "…" + contact.contactFingerprint.takeLast(8))
                         val isUnavailable = (failures[contact.contactFingerprint] ?: 0) >=
                             AppContainer.DEAD_CONTACT_THRESHOLD
+                        val verified = messaging.isContactVerified(contact.contactFingerprint)
                         Row(
                             id = contact.contactFingerprint,
                             kind = Row.Kind.Contact,
@@ -183,6 +192,7 @@ class ContactListViewModel : ViewModel() {
                             lastMessageBody = last?.body,
                             lastTimestamp = last?.timestamp,
                             unavailable = isUnavailable,
+                            verified = verified,
                         )
                     }
                     // Groups (ADR 023) — listed alongside contacts. Last

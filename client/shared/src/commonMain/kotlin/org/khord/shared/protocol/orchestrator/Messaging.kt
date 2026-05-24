@@ -556,6 +556,24 @@ class Messaging internal constructor(
         contactsByFingerprint[fingerprint]?.displayName?.takeIf { it.isNotEmpty() }
 
     /**
+     * Mark / unmark a contact as fingerprint-verified. Local trust
+     * decision — never transmitted. The [applyX3dhInitialReset] hook
+     * unconditionally clears verified on any key change so a key
+     * rotation / seed-phrase recovery / impersonation drops the
+     * badge until the user re-verifies in person.
+     */
+    suspend fun setContactVerified(fingerprint: String, verified: Boolean) {
+        checkAlive()
+        val info = contactsByFingerprint[fingerprint] ?: return
+        contactsByFingerprint[fingerprint] = info.copy(verified = verified)
+        persistence.setContactVerified(fingerprint, verified)
+    }
+
+    /** True if the user has fingerprint-verified this contact. */
+    fun isContactVerified(fingerprint: String): Boolean =
+        contactsByFingerprint[fingerprint]?.verified == true
+
+    /**
      * Forget a contact entirely. Drops:
      *   - the in-memory [ContactSession] (so [contacts] and
      *     [pushSubscriptions] both stop returning this fingerprint
@@ -1663,11 +1681,27 @@ class Messaging internal constructor(
         // the fingerprint matches `oldContact.contactFingerprint`),
         // so the status MUST already exist — but fall back to PENDING
         // defensively if the in-memory map is somehow out of sync.
-        val existingStatus = contactsByFingerprint[initiatorFp]?.status
+        val existingInfo = contactsByFingerprint[initiatorFp]
+        val existingStatus = existingInfo?.status
             ?: org.khord.shared.storage.ContactStatus.PENDING
+        // Capture verified status BEFORE the upsert so we know whether
+        // to surface the "your prior verification just got dropped"
+        // banner. The upsert preserves verified=true (per the
+        // pending_payload + verified preservation pattern in
+        // DbPersistence.saveContact), but we want to FORCE it to false
+        // on key change — that's the whole point of the reset hook.
+        val wasVerified = existingInfo?.verified == true
         contactsByFingerprint[initiatorFp] =
             ContactInfo(updatedQr, replyInfo.displayName, existingStatus)
         persistence.saveContact(updatedQr, replyInfo.displayName, existingStatus)
+        // Force-clear verified after the upsert. Done unconditionally;
+        // a no-op when wasVerified=false, plus defensive against the
+        // upsert preserving a stale verified=true if the in-memory
+        // copy was somehow out of sync with persistence.
+        persistence.setContactVerified(initiatorFp, false)
+        contactsByFingerprint[initiatorFp] =
+            contactsByFingerprint[initiatorFp]?.copy(verified = false)
+                ?: contactsByFingerprint[initiatorFp]!!
 
         val newContact = ContactSession(
             contactIdentityKey = ikA,
@@ -1685,6 +1719,31 @@ class Messaging internal constructor(
         // reads naturally: ... old messages ... [reset marker] ...
         // new first message ...
         saveSessionResetMarker(initiatorFp)
+        // If the contact had been fingerprint-verified before this
+        // reset, surface a SECOND system message that calls out the
+        // verification drop specifically. The existing session-reset
+        // marker is more generic; the verification-specific text
+        // makes clear "the trust decision you made earlier no longer
+        // applies — someone may be impersonating, or your contact
+        // recovered from seed phrase." Logged via DiagnosticLog so
+        // the field bug-report trail captures the event.
+        if (wasVerified) {
+            val displayLabel = replyInfo.displayName.ifEmpty {
+                initiatorFp.take(8) + "…" + initiatorFp.takeLast(8)
+            }
+            persistence.saveMessage(
+                contactFingerprint = initiatorFp,
+                direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+                body = "Security verification has been reset. " +
+                    "$displayLabel's identity key has changed.",
+                timestamp = kotlinx.datetime.Clock.System.now().toString(),
+            )
+            org.khord.shared.diagnostic.commonDiagnosticLog(
+                "Khord",
+                "Verified flag cleared on session reset for $initiatorFp " +
+                    "(key change / seed recovery / impersonation).",
+            )
+        }
         persistence.saveMessage(
             contactFingerprint = initiatorFp,
             direction = org.khord.shared.storage.MessageDirection.RECEIVED,
