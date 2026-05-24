@@ -67,6 +67,13 @@ class ChatViewModel(
         val contactDisplayName: String? = null,
         /** Reachability heuristic for the contact's relay endpoint. */
         val contactStatus: ContactStatus = ContactStatus.Available,
+        /**
+         * Locally-marked verified flag. Updated alongside history on
+         * every reload — typically refreshes within 5s of a verify
+         * action because the polling loop ticks it. Drives the small
+         * shield-check badge in the chat header.
+         */
+        val verified: Boolean = false,
     )
 
     /** Called by ChatScreen after the user dismisses the bug-report dialog. */
@@ -200,7 +207,14 @@ class ChatViewModel(
         val messaging = AppContainer.messaging ?: return
         val history = messaging.messageHistory(contactFingerprint)
         val name = messaging.contactDisplayName(contactFingerprint)
-        _state.update { it.copy(messages = history, contactDisplayName = name) }
+        val verified = messaging.isContactVerified(contactFingerprint)
+        _state.update {
+            it.copy(
+                messages = history,
+                contactDisplayName = name,
+                verified = verified,
+            )
+        }
     }
 
     private suspend fun fetchOnce() {

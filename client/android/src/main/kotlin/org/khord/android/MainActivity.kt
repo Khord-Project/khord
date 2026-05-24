@@ -24,6 +24,7 @@ import org.khord.android.push.KhordNotifications
 import org.khord.android.ui.screens.AddContactScreen
 import org.khord.android.ui.screens.ChatScreen
 import org.khord.android.ui.screens.ContactListScreen
+import org.khord.android.ui.screens.FingerprintScreen
 import org.khord.android.ui.screens.CreateGroupScreen
 import org.khord.android.ui.screens.GroupChatScreen
 import org.khord.android.ui.screens.GroupInfoScreen
@@ -147,6 +148,13 @@ private fun KhordNavGraph(
         ) { backStackEntry ->
             val gid = backStackEntry.arguments?.getString("groupId") ?: return@composable
             GroupInfoScreen(nav, groupId = gid)
+        }
+        composable(
+            route = Routes.FINGERPRINT_PATTERN,
+            arguments = listOf(navArgument("fingerprint") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val fp = backStackEntry.arguments?.getString("fingerprint") ?: return@composable
+            FingerprintScreen(nav, contactFingerprint = fp)
         }
     }
 }

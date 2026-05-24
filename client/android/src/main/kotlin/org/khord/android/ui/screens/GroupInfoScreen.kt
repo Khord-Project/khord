@@ -87,7 +87,22 @@ fun GroupInfoScreen(nav: NavController, groupId: String) {
             Spacer(Modifier.height(8.dp))
             LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(state.members) { m ->
-                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    // Tap a member row → fingerprint-verification
+                    // screen for that contact. Verification flow
+                    // works identically to 1:1 — but the verified
+                    // badge does NOT render in group chats (per the
+                    // feature spec; per-member badges in messages
+                    // are deferred).
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                nav.navigate(
+                                    org.khord.android.nav.Routes.fingerprint(m.fingerprint),
+                                )
+                            }
+                            .padding(vertical = 8.dp),
+                    ) {
                         Text(
                             m.displayName.ifEmpty {
                                 m.fingerprint.take(8) + "…" + m.fingerprint.takeLast(8)

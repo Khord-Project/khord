@@ -351,6 +351,37 @@ class DbPersistenceTest {
     }
 
     @Test
+    fun verified_flag_round_trip_and_preserved_across_saveContact() = runTest {
+        val p = openTestDb()
+        try {
+            val fp = "e".repeat(64)
+            val qr = QrPayload(
+                identityKey = "AAAA", fingerprint = fp,
+                keyServer = "x", relayServer = "y",
+                relayMailbox = "mailbox-id-22-chars-eeee",
+            )
+            p.saveContact(qr, "Alice")
+            assertEquals(false, p.isContactVerified(fp))
+            assertEquals(false, p.loadContact(fp)!!.verified)
+
+            p.setContactVerified(fp, true)
+            assertEquals(true, p.isContactVerified(fp))
+            assertEquals(true, p.loadContact(fp)!!.verified)
+
+            // Re-upsert (e.g. reply_info brought a fresh display name).
+            // verified MUST survive — only setContactVerified is allowed
+            // to mutate that column directly.
+            p.saveContact(qr, "Alice (new)")
+            assertEquals(true, p.loadContact(fp)!!.verified)
+
+            p.setContactVerified(fp, false)
+            assertEquals(false, p.isContactVerified(fp))
+        } finally {
+            p.close()
+        }
+    }
+
+    @Test
     fun messages_preserve_order_under_load() = runTest {
         val p = openTestDb()
         try {

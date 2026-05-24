@@ -248,6 +248,44 @@ class InMemoryPersistenceTest {
     }
 
     @Test
+    fun verified_flag_round_trip_default_false() = runTest {
+        val p = InMemoryPersistence()
+        val fp = "v".repeat(64)
+        val qr = QrPayload(
+            identityKey = "AAAA", fingerprint = fp,
+            keyServer = "x", relayServer = "y",
+            relayMailbox = "m" + "0".repeat(21),
+        )
+        p.saveContact(qr, "Alice")
+        // Default after save: not verified.
+        assertEquals(false, p.isContactVerified(fp))
+        assertEquals(false, p.loadContact(fp)!!.verified)
+
+        // Flip true.
+        p.setContactVerified(fp, true)
+        assertEquals(true, p.isContactVerified(fp))
+        assertEquals(true, p.loadContact(fp)!!.verified)
+
+        // saveContact again (e.g. display-name update path) must
+        // PRESERVE verified, not silently reset it.
+        p.saveContact(qr, "Alice (new name)")
+        assertEquals(true, p.loadContact(fp)!!.verified)
+
+        // Flip false.
+        p.setContactVerified(fp, false)
+        assertEquals(false, p.isContactVerified(fp))
+    }
+
+    @Test
+    fun verified_for_unknown_fingerprint_is_false() = runTest {
+        val p = InMemoryPersistence()
+        assertEquals(false, p.isContactVerified("does-not-exist"))
+        // setContactVerified on an unknown fingerprint is a no-op.
+        p.setContactVerified("also-not-here", true)
+        assertEquals(false, p.isContactVerified("also-not-here"))
+    }
+
+    @Test
     fun panic_wipes_everything() = runTest {
         val p = InMemoryPersistence()
         val id = aliceIdentity()

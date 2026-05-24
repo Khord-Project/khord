@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -475,13 +476,25 @@ private fun ConversationRow(
             modifier = Modifier.size(28.dp).padding(end = 12.dp),
         )
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                row.displayLabel,
-                style = MaterialTheme.typography.titleMedium,
-                color = nameColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    row.displayLabel,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = nameColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (row.verified) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        Icons.Filled.Verified,
+                        contentDescription = "Verified",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
             Text(
                 previewText,
                 style = MaterialTheme.typography.bodyMedium,

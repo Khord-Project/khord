@@ -1,6 +1,7 @@
 package org.khord.android.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -16,6 +18,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -92,11 +95,31 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     }
                 },
                 title = {
-                    Column {
-                        Text(
-                            state.contactDisplayName ?: "Unknown contact",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
+                    // Whole header is tappable → fingerprint verification
+                    // screen. Clickable on the Column so both rows
+                    // (name + truncated fingerprint) act as one target.
+                    Column(
+                        modifier = Modifier.clickable {
+                            nav.navigate(
+                                org.khord.android.nav.Routes.fingerprint(contactFingerprint),
+                            )
+                        },
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                state.contactDisplayName ?: "Unknown contact",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            if (state.verified) {
+                                Spacer(Modifier.width(6.dp))
+                                Icon(
+                                    Icons.Filled.Verified,
+                                    contentDescription = "Verified",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                         Text(
                             "${contactFingerprint.take(8)}…${contactFingerprint.takeLast(8)}",
                             style = MaterialTheme.typography.bodySmall,

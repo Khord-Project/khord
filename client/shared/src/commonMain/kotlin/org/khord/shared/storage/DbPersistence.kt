@@ -125,15 +125,15 @@ internal class DbPersistence(
         displayName: String,
         status: ContactStatus,
     ) {
-        // Preserve any pending_payload across re-upserts. INSERT OR
-        // REPLACE nulls every column, so we read the current value
-        // first and pass it back in. Only [setContactPendingPayload]
-        // is allowed to mutate that field directly.
+        // Preserve any pending_payload + verified across re-upserts.
+        // INSERT OR REPLACE nulls every column, so read the current
+        // values first and pass them back in. Only the dedicated
+        // [setContactPendingPayload] / [setContactVerified] setters
+        // are allowed to mutate those fields directly.
         db.transaction {
-            val keepPayload = db.contactQueries
+            val existing = db.contactQueries
                 .selectContactByFingerprint(qr.fingerprint)
                 .executeAsOneOrNull()
-                ?.pending_payload
             db.contactQueries.upsertContact(
                 fingerprint = qr.fingerprint,
                 ed25519_public = identityKeyBase64ToBytes(qr.identityKey),
@@ -143,7 +143,8 @@ internal class DbPersistence(
                 stored_at = now(),
                 display_name = displayName,
                 status = status.wireValue(),
-                pending_payload = keepPayload,
+                pending_payload = existing?.pending_payload,
+                verified = existing?.verified ?: 0L,
             )
         }
     }
@@ -157,6 +158,7 @@ internal class DbPersistence(
             displayName = row.display_name,
             status = ContactStatus.fromWire(row.status),
             pendingPayload = row.pending_payload,
+            verified = row.verified != 0L,
         )
     }
 
@@ -168,6 +170,7 @@ internal class DbPersistence(
                 displayName = it.display_name,
                 status = ContactStatus.fromWire(it.status),
                 pendingPayload = it.pending_payload,
+                verified = it.verified != 0L,
             )
         }
 
@@ -179,6 +182,7 @@ internal class DbPersistence(
                 displayName = it.display_name,
                 status = ContactStatus.fromWire(it.status),
                 pendingPayload = it.pending_payload,
+                verified = it.verified != 0L,
             )
         }
 
@@ -193,6 +197,14 @@ internal class DbPersistence(
     override suspend fun setContactPendingPayload(fingerprint: String, payload: String?) {
         db.contactQueries.setContactPendingPayload(payload, fingerprint)
     }
+
+    override suspend fun setContactVerified(fingerprint: String, verified: Boolean) {
+        db.contactQueries.setContactVerified(if (verified) 1L else 0L, fingerprint)
+    }
+
+    override suspend fun isContactVerified(fingerprint: String): Boolean =
+        (db.contactQueries.selectContactByFingerprint(fingerprint)
+            .executeAsOneOrNull()?.verified ?: 0L) != 0L
 
     override suspend fun deleteContact(fingerprint: String) {
         // Explicit transactional delete of messages + session + the

@@ -30,7 +30,15 @@ CREATE TABLE contact (
     -- silently dropped because their contact row is pending and the
     -- group_invite branch otherwise short-circuits before the group
     -- gets created locally. Nullable, default null. Added by 4.sqm.
-    pending_payload    TEXT
+    pending_payload    TEXT,
+    -- Local-only fingerprint-verification flag — 0 = unverified, 1 =
+    -- user has visually compared this contact's identity-key
+    -- fingerprint and accepted that they are who they claim.
+    -- Cleared automatically by Messaging.applyX3dhInitialReset on
+    -- any key change so a key rotation / recovery / impersonation
+    -- attempt drops the badge until re-verification. Never
+    -- transmitted to the contact. Added by 6.sqm.
+    verified           INTEGER NOT NULL DEFAULT 0
 );
 
 -- INSERT OR REPLACE replaces every column including pending_payload.
@@ -41,11 +49,15 @@ CREATE TABLE contact (
 upsertContact:
 INSERT OR REPLACE INTO contact(
     fingerprint, ed25519_public, key_server_url, relay_server_url,
-    contact_mailbox, stored_at, display_name, status, pending_payload
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    contact_mailbox, stored_at, display_name, status,
+    pending_payload, verified
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 setContactPendingPayload:
 UPDATE contact SET pending_payload = ? WHERE fingerprint = ?;
+
+setContactVerified:
+UPDATE contact SET verified = ? WHERE fingerprint = ?;
 
 selectContactByFingerprint:
 SELECT * FROM contact WHERE fingerprint = ?;

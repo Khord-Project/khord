@@ -16,6 +16,7 @@ Proof of Concept — under active development.
 - **Metadata minimization:** The two-server split ensures that the server storing identity keys never sees message traffic, and the server routing messages never sees user identities.
 - **Jurisdictional resistance:** The architecture is designed so that Key Servers and Relay Servers can be operated by independent organizations in different legal jurisdictions. No single legal authority can compel both operators to cooperate.
 - **Traffic analysis awareness:** The architecture does not implement full traffic analysis resistance in the PoC, but is designed so that future mitigations (Tor support, padding, decoy traffic) can be layered on without protocol changes.
+- **Contact fingerprint verification with key-change warnings:** Each contact's identity-key fingerprint can be visually compared (or QR-scanned) in person; once verified, the badge persists until the contact's key changes. A session reset — from seed-phrase recovery, key rotation, or a successful impersonation — automatically drops the badge and surfaces a system message in the chat so the user has to re-verify before trusting again.
 
 ## Threat Model
 
