@@ -107,22 +107,13 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
                 Spacer(Modifier.height(16.dp))
 
                 Text("Servers", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Key server: ${state.keyServerUrl ?: "(loading)"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Relay server: ${state.relayServerUrl ?: "(loading)"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(Modifier.height(8.dp))
-
-                Text("Server status", style = MaterialTheme.typography.titleMedium)
-                ServerHealthRow("Key server", state.keyServerHealth)
-                ServerHealthRow("Relay server", state.relayServerHealth)
+                // Combined row: status dot + label/URL stacked +
+                // status text. One section instead of two parallel
+                // sections (URL list, then status list) — keeps the
+                // two pieces of information about each server next
+                // to each other.
+                ServerHealthRow("Key server", state.keyServerUrl, state.keyServerHealth)
+                ServerHealthRow("Relay server", state.relayServerUrl, state.relayServerHealth)
 
                 Spacer(Modifier.height(16.dp))
 
@@ -191,15 +182,19 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
  * end of the Settings column.
  */
 /**
- * Coloured-dot status indicator for one server's /v1/health probe.
- * Layout: small filled circle (green / red / muted) + label ("Key
- * server") + status text ("Operational" / "Unreachable" / "Checking…").
- * Snapshot only — the SettingsViewModel fires the probe once at
- * screen open; back-out + re-enter to refresh.
+ * Coloured-dot row showing one server's health + its URL. Layout:
+ * small filled circle (green/red/muted) + a two-line block
+ * (label on top, URL below in muted style) + status text aligned
+ * right. One row replaces the previous parallel "Key server: <url>"
+ * + "● Key server  Operational" pair — same information, half the
+ * vertical space. Snapshot-only health — the SettingsViewModel
+ * fires the probe once on screen open; back-out + re-enter to
+ * refresh.
  */
 @Composable
 private fun ServerHealthRow(
     label: String,
+    url: String?,
     health: org.khord.android.ui.viewmodel.SettingsViewModel.ServerHealth,
 ) {
     val (dotColor, statusText) = when (health) {
@@ -211,7 +206,7 @@ private fun ServerHealthRow(
             MaterialTheme.colorScheme.error to "Unreachable"
     }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -220,12 +215,15 @@ private fun ServerHealthRow(
                 .clip(CircleShape)
                 .background(dotColor),
         )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.weight(1f),
-        )
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                url ?: "(loading)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
             statusText,
             style = MaterialTheme.typography.bodySmall,
