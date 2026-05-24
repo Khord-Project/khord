@@ -4,12 +4,17 @@ import android.content.Context
 import android.os.Process
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.ktor.client.request.get
+import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.khord.android.AppContainer
 import org.khord.android.push.PushServiceController
 import org.khord.shared.diagnostic.DiagnosticLog
@@ -17,10 +22,24 @@ import org.khord.shared.storage.PlatformContextProvider
 
 class SettingsViewModel : ViewModel() {
 
+    /** Outcome of a single health-endpoint probe. */
+    enum class ServerHealth {
+        /** Probe in flight or not yet started — UI shows neutral "Checking…". */
+        Checking,
+        /** HTTP 2xx within the timeout — UI shows green dot + "Operational". */
+        Operational,
+        /** Non-2xx, exception, or timeout — UI shows red dot + "Unreachable". */
+        Unreachable,
+    }
+
     data class UiState(
         val fingerprint: String? = null,
         val keyServerUrl: String? = null,
         val relayServerUrl: String? = null,
+        /** Most recent probe outcome for the Key Server's /v1/health. */
+        val keyServerHealth: ServerHealth = ServerHealth.Checking,
+        /** Most recent probe outcome for the Relay Server's /v1/health. */
+        val relayServerHealth: ServerHealth = ServerHealth.Checking,
         /**
          * Flipped to true the instant the user confirms panic, BEFORE the
          * destructive coroutine launches. The screen swaps to a "Wiping…"
@@ -43,8 +62,61 @@ class SettingsViewModel : ViewModel() {
                     relayServerUrl = m.myRelayServerUrl,
                 )
             }
+            // Fire the two health probes in parallel on screen open.
+            // Snapshot-only — no auto-refresh, no retry; the user can
+            // back out + re-enter Settings to get a fresh reading.
+            checkServerHealth(m.myKeyServerUrl, m.myRelayServerUrl)
         }
     }
+
+    /**
+     * Concurrent health-probe of both configured servers. Each is a
+     * GET to `${url}/v1/health` with a 5-second timeout. The two probes
+     * run in parallel so the slower one doesn't gate the faster.
+     *
+     * Non-blocking, fire-and-forget: state starts as [ServerHealth.Checking]
+     * (the UiState default) and flips to [Operational] or [Unreachable]
+     * per server as each probe resolves. The UI binds directly to the
+     * StateFlow so partial results render the moment they arrive.
+     */
+    private fun checkServerHealth(keyServerUrl: String, relayServerUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val http = AppContainer.http ?: run {
+                // No HTTP client yet — mark both Unreachable. Shouldn't
+                // happen on a registered identity, but defensive against
+                // a Settings re-open after panic.
+                _state.update {
+                    it.copy(
+                        keyServerHealth = ServerHealth.Unreachable,
+                        relayServerHealth = ServerHealth.Unreachable,
+                    )
+                }
+                return@launch
+            }
+            // Two parallel probes, each independently mapped into the
+            // state flow as soon as it resolves.
+            val keyJob = async {
+                probeHealth(http, "$keyServerUrl/v1/health").also { result ->
+                    _state.update { it.copy(keyServerHealth = result) }
+                }
+            }
+            val relayJob = async {
+                probeHealth(http, "$relayServerUrl/v1/health").also { result ->
+                    _state.update { it.copy(relayServerHealth = result) }
+                }
+            }
+            awaitAll(keyJob, relayJob)
+        }
+    }
+
+    private suspend fun probeHealth(
+        http: io.ktor.client.HttpClient,
+        url: String,
+    ): ServerHealth = withTimeoutOrNull(5_000) {
+        runCatching { http.get(url).status }.getOrNull()?.let {
+            if (it.isSuccess()) ServerHealth.Operational else ServerHealth.Unreachable
+        } ?: ServerHealth.Unreachable
+    } ?: ServerHealth.Unreachable
 
     /**
      * Wipe everything: orchestrator panic + persistence panic + Keystore key
