@@ -191,6 +191,10 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                         Text(if (editingUuid != null) "Edit message…" else "Type a message")
                     },
                     singleLine = false,
+                    // Incognito keyboard — see ChatScreen for rationale.
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        platformImeOptions = androidx.compose.ui.text.input.PlatformImeOptions("nm"),
+                    ),
                 )
                 Spacer(Modifier.width(8.dp))
                 Button(

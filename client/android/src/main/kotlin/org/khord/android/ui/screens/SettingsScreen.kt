@@ -118,6 +118,12 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
+                Spacer(Modifier.height(8.dp))
+
+                Text("Server status", style = MaterialTheme.typography.titleMedium)
+                ServerHealthRow("Key server", state.keyServerHealth)
+                ServerHealthRow("Relay server", state.relayServerHealth)
+
                 Spacer(Modifier.height(16.dp))
 
                 XiaomiBatteryWarningCard()
@@ -184,6 +190,50 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
  * Small, muted, non-interactive — purely informational. Placed at the
  * end of the Settings column.
  */
+/**
+ * Coloured-dot status indicator for one server's /v1/health probe.
+ * Layout: small filled circle (green / red / muted) + label ("Key
+ * server") + status text ("Operational" / "Unreachable" / "Checking…").
+ * Snapshot only — the SettingsViewModel fires the probe once at
+ * screen open; back-out + re-enter to refresh.
+ */
+@Composable
+private fun ServerHealthRow(
+    label: String,
+    health: org.khord.android.ui.viewmodel.SettingsViewModel.ServerHealth,
+) {
+    val (dotColor, statusText) = when (health) {
+        org.khord.android.ui.viewmodel.SettingsViewModel.ServerHealth.Checking ->
+            MaterialTheme.colorScheme.onSurfaceVariant to "Checking…"
+        org.khord.android.ui.viewmodel.SettingsViewModel.ServerHealth.Operational ->
+            androidx.compose.ui.graphics.Color(0xFF2ECC40) to "Operational"
+        org.khord.android.ui.viewmodel.SettingsViewModel.ServerHealth.Unreachable ->
+            MaterialTheme.colorScheme.error to "Unreachable"
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(dotColor),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            statusText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun AppVersionFooter() {
     val versionName = BuildConfig.VERSION_NAME

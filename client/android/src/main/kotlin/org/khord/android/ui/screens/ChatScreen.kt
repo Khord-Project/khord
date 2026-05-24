@@ -209,6 +209,15 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     },
                     singleLine = false,
                     enabled = !unavailable,
+                    // Ask the keyboard not to learn from / autocomplete-
+                    // suggest user input. Gboard / SwiftKey / Samsung /
+                    // most mainstream IMEs honour the "nm" hint. End
+                    // result: typed chat content doesn't seed the
+                    // keyboard's personalisation model. Doesn't cover
+                    // IMEs that ignore the hint — best-effort.
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        platformImeOptions = androidx.compose.ui.text.input.PlatformImeOptions("nm"),
+                    ),
                 )
                 Spacer(Modifier.width(8.dp))
                 Button(
