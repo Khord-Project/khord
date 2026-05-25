@@ -38,7 +38,11 @@ CREATE TABLE contact (
     -- any key change so a key rotation / recovery / impersonation
     -- attempt drops the badge until re-verification. Never
     -- transmitted to the contact. Added by 6.sqm.
-    verified           INTEGER NOT NULL DEFAULT 0
+    verified           INTEGER NOT NULL DEFAULT 0,
+    -- User-set nickname that overrides the contact's self-reported
+    -- display_name in the UI. Local-only, never transmitted.
+    -- Nullable; null = fall back to display_name. Added by 7.sqm.
+    local_display_name TEXT
 );
 
 -- INSERT OR REPLACE replaces every column including pending_payload.
@@ -50,14 +54,17 @@ upsertContact:
 INSERT OR REPLACE INTO contact(
     fingerprint, ed25519_public, key_server_url, relay_server_url,
     contact_mailbox, stored_at, display_name, status,
-    pending_payload, verified
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    pending_payload, verified, local_display_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 setContactPendingPayload:
 UPDATE contact SET pending_payload = ? WHERE fingerprint = ?;
 
 setContactVerified:
 UPDATE contact SET verified = ? WHERE fingerprint = ?;
+
+setContactLocalName:
+UPDATE contact SET local_display_name = ? WHERE fingerprint = ?;
 
 selectContactByFingerprint:
 SELECT * FROM contact WHERE fingerprint = ?;

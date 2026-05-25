@@ -350,7 +350,13 @@ class Messaging internal constructor(
         checkAlive()
         return contactsByFingerprint.values
             .filter { it.status == org.khord.shared.storage.ContactStatus.PENDING }
-            .map { PendingContact(it.qr.fingerprint, it.displayName) }
+            .map {
+                // Honour a local nickname override here too, falling
+                // back to the contact's self-reported name.
+                val name = it.localDisplayName?.takeIf { n -> n.isNotBlank() }
+                    ?: it.displayName
+                PendingContact(it.qr.fingerprint, name)
+            }
     }
 
     /** True iff the fingerprint is known AND its status is ACCEPTED. */
@@ -551,9 +557,37 @@ class Messaging internal constructor(
     /** This user's chosen display name (or "Anonymous"). */
     val myDisplayName: String get() = displayName
 
-    /** Display name learned for a contact, or null if we haven't learned one yet. */
-    fun contactDisplayName(fingerprint: String): String? =
-        contactsByFingerprint[fingerprint]?.displayName?.takeIf { it.isNotEmpty() }
+    /**
+     * Effective display name for a contact: the user's local nickname
+     * override if set, else the contact's self-reported display name,
+     * else null (callers fall back to a fingerprint prefix). This is
+     * the single resolution point for the
+     * `local_display_name ?? display_name ?? fingerprint` precedence —
+     * every screen that shows a contact name routes through here.
+     */
+    fun contactDisplayName(fingerprint: String): String? {
+        val info = contactsByFingerprint[fingerprint] ?: return null
+        return info.localDisplayName?.takeIf { it.isNotBlank() }
+            ?: info.displayName.takeIf { it.isNotEmpty() }
+    }
+
+    /** Raw local nickname override (null if none), for the rename dialog. */
+    fun contactLocalName(fingerprint: String): String? =
+        contactsByFingerprint[fingerprint]?.localDisplayName
+
+    /**
+     * Set (blank/null clears) the local nickname override for a
+     * contact. Local-only, never transmitted; takes precedence over
+     * the contact's self-reported name everywhere via
+     * [contactDisplayName].
+     */
+    suspend fun setContactLocalName(fingerprint: String, localName: String?) {
+        checkAlive()
+        val normalised = localName?.takeIf { it.isNotBlank() }?.trim()
+        val info = contactsByFingerprint[fingerprint] ?: return
+        contactsByFingerprint[fingerprint] = info.copy(localDisplayName = normalised)
+        persistence.setContactLocalName(fingerprint, normalised)
+    }
 
     /**
      * Mark / unmark a contact as fingerprint-verified. Local trust
@@ -1227,6 +1261,44 @@ class Messaging internal constructor(
                     replyInfo = myReplyInfo(contact.inboundMailboxId),
                     groupId = groupId,
                     added = WireGroupMember(fingerprint, newName),
+                ),
+            )
+        }
+    }
+
+    /**
+     * Rename a group. Admin-only (matches the inbound auth gate in
+     * [handleGroupNameChanged], which ignores rename payloads from
+     * anyone but the group's creator). Updates the local name, then
+     * fans a `group_name_changed` payload out to every member with an
+     * active session — same pairwise-channel pattern as
+     * [sendGroupMessage]. Members without a live session are silently
+     * skipped (ADR 023); they'll see the old name until a future
+     * message re-syncs, which is acceptable for a cosmetic field.
+     */
+    suspend fun renameGroup(groupId: String, newName: String) {
+        checkAlive()
+        val trimmed = newName.trim()
+        require(trimmed.isNotEmpty()) { "group name must be non-blank" }
+        val group = persistence.loadGroup(groupId)
+            ?: throw IllegalStateException("unknown groupId: $groupId")
+        check(group.isAdmin) { "only the admin can rename the group" }
+
+        persistence.updateGroupName(groupId, trimmed)
+
+        val members = persistence.loadGroupMembers(groupId)
+            .filter { it.fingerprint != identity.fingerprint }
+        val timestamp = Clock.System.now().toString()
+        for (m in members) {
+            val contact = sessionForFingerprint(m.fingerprint) ?: continue
+            sendGroupInnerPayload(
+                contact = contact,
+                payload = InnerPayload(
+                    type = "group_name_changed",
+                    timestamp = timestamp,
+                    replyInfo = myReplyInfo(contact.inboundMailboxId),
+                    groupId = groupId,
+                    groupName = trimmed,
                 ),
             )
         }

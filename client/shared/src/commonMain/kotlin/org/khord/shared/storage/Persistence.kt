@@ -107,6 +107,12 @@ internal interface Persistence {
     suspend fun isContactVerified(fingerprint: String): Boolean
 
     /**
+     * Set (or clear, when null/blank) the local nickname override on
+     * a contact. No-op for unknown fingerprints.
+     */
+    suspend fun setContactLocalName(fingerprint: String, localName: String?)
+
+    /**
      * Remove a contact and every record that depends on it: the
      * pairwise Double Ratchet session row, every persisted message,
      * and the contact row itself. The relay-side mailbox binding is
@@ -295,6 +301,12 @@ internal data class ContactInfo(
      * `verified` column for full semantics.
      */
     val verified: Boolean = false,
+    /**
+     * User-set nickname overriding [displayName] in the UI. Null
+     * means "use displayName". Local-only. See Contact.sq's
+     * `local_display_name` column.
+     */
+    val localDisplayName: String? = null,
 )
 
 internal enum class ContactStatus {

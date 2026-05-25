@@ -382,6 +382,35 @@ class DbPersistenceTest {
     }
 
     @Test
+    fun local_display_name_round_trip_and_preserved_across_saveContact() = runTest {
+        val p = openTestDb()
+        try {
+            val fp = "f".repeat(64)
+            val qr = QrPayload(
+                identityKey = "AAAA", fingerprint = fp,
+                keyServer = "x", relayServer = "y",
+                relayMailbox = "mailbox-id-22-chars-ffff",
+            )
+            p.saveContact(qr, "Self Name")
+            assertEquals(null, p.loadContact(fp)!!.localDisplayName)
+
+            p.setContactLocalName(fp, "Nickname")
+            assertEquals("Nickname", p.loadContact(fp)!!.localDisplayName)
+
+            // Re-upsert preserves the override.
+            p.saveContact(qr, "Self Name v2")
+            assertEquals("Nickname", p.loadContact(fp)!!.localDisplayName)
+            assertEquals("Self Name v2", p.loadContact(fp)!!.displayName)
+
+            // Blank clears.
+            p.setContactLocalName(fp, "")
+            assertEquals(null, p.loadContact(fp)!!.localDisplayName)
+        } finally {
+            p.close()
+        }
+    }
+
+    @Test
     fun messages_preserve_order_under_load() = runTest {
         val p = openTestDb()
         try {

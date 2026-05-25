@@ -27,8 +27,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -75,6 +77,7 @@ fun FingerprintScreen(nav: NavController, contactFingerprint: String) {
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var showRename by remember { mutableStateOf(false) }
 
     // Surface a brief snackbar confirmation when verified flips.
     LaunchedEffect(state.justUpdated) {
@@ -172,8 +175,63 @@ fun FingerprintScreen(nav: NavController, contactFingerprint: String) {
                     ),
                 ) { Text("Mark as verified") }
             }
+
+            OutlinedButton(
+                onClick = { showRename = true },
+                enabled = canAct,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Rename contact") }
         }
     }
+
+    if (showRename) {
+        RenameContactDialog(
+            currentName = state.contactDisplayName.orEmpty(),
+            onDismiss = { showRename = false },
+            onConfirm = { newName ->
+                showRename = false
+                vm.rename(newName)
+            },
+        )
+    }
+}
+
+@Composable
+private fun RenameContactDialog(
+    currentName: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(currentName) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename contact") },
+        text = {
+            androidx.compose.foundation.layout.Column {
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    label = { Text("Display name") },
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Clear the field to reset to the contact's own name. " +
+                        "This nickname is local to your device.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = { onConfirm(text) },
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 /**

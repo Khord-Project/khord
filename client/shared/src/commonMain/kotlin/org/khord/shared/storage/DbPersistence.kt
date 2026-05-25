@@ -145,6 +145,7 @@ internal class DbPersistence(
                 status = status.wireValue(),
                 pending_payload = existing?.pending_payload,
                 verified = existing?.verified ?: 0L,
+                local_display_name = existing?.local_display_name,
             )
         }
     }
@@ -159,6 +160,7 @@ internal class DbPersistence(
             status = ContactStatus.fromWire(row.status),
             pendingPayload = row.pending_payload,
             verified = row.verified != 0L,
+            localDisplayName = row.local_display_name,
         )
     }
 
@@ -171,6 +173,7 @@ internal class DbPersistence(
                 status = ContactStatus.fromWire(it.status),
                 pendingPayload = it.pending_payload,
                 verified = it.verified != 0L,
+                localDisplayName = it.local_display_name,
             )
         }
 
@@ -183,6 +186,7 @@ internal class DbPersistence(
                 status = ContactStatus.fromWire(it.status),
                 pendingPayload = it.pending_payload,
                 verified = it.verified != 0L,
+                localDisplayName = it.local_display_name,
             )
         }
 
@@ -205,6 +209,11 @@ internal class DbPersistence(
     override suspend fun isContactVerified(fingerprint: String): Boolean =
         (db.contactQueries.selectContactByFingerprint(fingerprint)
             .executeAsOneOrNull()?.verified ?: 0L) != 0L
+
+    override suspend fun setContactLocalName(fingerprint: String, localName: String?) {
+        val normalised = localName?.takeIf { it.isNotBlank() }?.trim()
+        db.contactQueries.setContactLocalName(normalised, fingerprint)
+    }
 
     override suspend fun deleteContact(fingerprint: String) {
         // Explicit transactional delete of messages + session + the

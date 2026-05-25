@@ -1,0 +1,11 @@
+-- Migration from schema version 7 to 8.
+--
+-- Adds contact.local_display_name — a user-set nickname that
+-- overrides the contact's self-reported display_name in the UI.
+-- Local-only, never transmitted. Nullable: null means "use the
+-- contact's own display_name" (the default for every existing
+-- contact, since nobody has set a nickname before this column
+-- existed). Cleared back to null when the user blanks the rename
+-- field. Display precedence everywhere is:
+--   local_display_name ?? display_name ?? fingerprint-prefix
+ALTER TABLE contact ADD COLUMN local_display_name TEXT;

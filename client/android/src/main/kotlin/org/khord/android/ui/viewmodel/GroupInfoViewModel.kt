@@ -79,4 +79,16 @@ class GroupInfoViewModel(
             }
         }
     }
+
+    fun rename(newName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                AppContainer.messaging?.renameGroup(groupId, newName)
+                    ?: error("not initialised")
+                reload()
+            }.onFailure { e ->
+                _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+            }
+        }
+    }
 }
