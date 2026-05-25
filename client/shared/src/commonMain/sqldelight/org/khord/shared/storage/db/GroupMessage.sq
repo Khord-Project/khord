@@ -17,7 +17,10 @@ CREATE TABLE group_message (
     -- historical message by sender-issued UUID rather than fragile
     -- (group_id, timestamp) coordinates.
     message_uuid          TEXT,
-    edited                INTEGER NOT NULL DEFAULT 0
+    edited                INTEGER NOT NULL DEFAULT 0,
+    -- message_uuid of the group message this one replies to (#61).
+    -- Nullable; null = not a reply. See Message.sq.
+    reply_to_uuid         TEXT
 );
 
 CREATE INDEX group_message_by_group ON group_message(group_id, id);
@@ -26,11 +29,11 @@ CREATE INDEX group_message_by_uuid ON group_message(message_uuid);
 insertGroupMessage:
 INSERT INTO group_message(
     group_id, sender_fingerprint, sender_display_name,
-    body, timestamp, direction, stored_at, message_uuid
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+    body, timestamp, direction, stored_at, message_uuid, reply_to_uuid
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectGroupMessages:
-SELECT id, sender_fingerprint, sender_display_name, body, timestamp, direction, stored_at, message_uuid, edited
+SELECT id, sender_fingerprint, sender_display_name, body, timestamp, direction, stored_at, message_uuid, edited, reply_to_uuid
   FROM group_message
  WHERE group_id = ?
  ORDER BY id ASC;

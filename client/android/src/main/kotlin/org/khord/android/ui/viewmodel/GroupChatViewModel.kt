@@ -119,7 +119,7 @@ class GroupChatViewModel(
         }
     }
 
-    fun send(text: String) {
+    fun send(text: String, replyToUuid: String? = null) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
@@ -127,7 +127,7 @@ class GroupChatViewModel(
                 _state.update { it.copy(sending = true, error = null) }
                 runCatching {
                     val messaging = AppContainer.messaging ?: error("not initialised")
-                    messaging.sendGroupMessage(groupId, trimmed)
+                    messaging.sendGroupMessage(groupId, trimmed, replyToUuid)
                     reloadLockedInternal()
                 }.onFailure { e ->
                     _state.update {

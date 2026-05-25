@@ -1,0 +1,14 @@
+-- Migration from schema version 8 to 9.
+--
+-- Adds reply_to_uuid to both per-contact `message` and per-group
+-- `group_message` tables — the message_uuid of the message this one
+-- is a reply to (quote-reply, #61). Nullable; null = not a reply.
+-- The quoted text is NOT stored here; the receiver looks the
+-- referenced message up locally by UUID, so a sender can't fabricate
+-- a quote. Builds on the message_uuid column added in 5.sqm.
+--
+-- NOTE: this 8.sqm may collide with the contact-blocking and
+-- message-search branches, which also branch from schema v8.
+-- Whichever lands second renumbers to 9.sqm / 10.sqm.
+ALTER TABLE message ADD COLUMN reply_to_uuid TEXT;
+ALTER TABLE group_message ADD COLUMN reply_to_uuid TEXT;

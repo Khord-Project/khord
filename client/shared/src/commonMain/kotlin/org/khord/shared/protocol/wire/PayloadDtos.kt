@@ -98,6 +98,15 @@ internal data class InnerPayload(
      * so we don't have to overload its semantics.
      */
     val newBody: String? = null,
+
+    /**
+     * For a "text" or "group_message" that is a quote-reply (#61):
+     * the [messageUuid] of the message being replied to. Null = not
+     * a reply. The quoted TEXT is never carried on the wire — the
+     * receiver resolves it locally by UUID, so a sender can't
+     * fabricate a quote.
+     */
+    val replyToUuid: String? = null,
 )
 
 /**

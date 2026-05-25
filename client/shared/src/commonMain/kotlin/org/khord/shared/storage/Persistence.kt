@@ -152,6 +152,7 @@ internal interface Persistence {
         body: String,
         timestamp: String,
         messageUuid: String? = null,
+        replyToUuid: String? = null,
     )
     suspend fun loadMessages(contactFingerprint: String): List<StoredMessage>
 
@@ -216,6 +217,7 @@ internal interface Persistence {
         timestamp: String,
         direction: MessageDirection,
         messageUuid: String? = null,
+        replyToUuid: String? = null,
     )
 
     suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord>
@@ -354,6 +356,7 @@ internal data class StoredMessage(
     val storedAt: String,
     val messageUuid: String? = null,
     val edited: Boolean = false,
+    val replyToUuid: String? = null,
 )
 
 /**
@@ -398,6 +401,7 @@ internal data class GroupMessageRecord(
     val storedAt: String,
     val messageUuid: String? = null,
     val edited: Boolean = false,
+    val replyToUuid: String? = null,
 )
 
 /**

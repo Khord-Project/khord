@@ -155,6 +155,7 @@ internal class InMemoryPersistence : Persistence {
         body: String,
         timestamp: String,
         messageUuid: String?,
+        replyToUuid: String?,
     ) {
         val msg = StoredMessage(
             id = nextMessageId++,
@@ -164,6 +165,7 @@ internal class InMemoryPersistence : Persistence {
             storedAt = Clock.System.now().toString(),
             messageUuid = messageUuid,
             edited = false,
+            replyToUuid = replyToUuid,
         )
         messages += contactFingerprint to msg
     }
@@ -254,6 +256,7 @@ internal class InMemoryPersistence : Persistence {
         timestamp: String,
         direction: MessageDirection,
         messageUuid: String?,
+        replyToUuid: String?,
     ) {
         val msg = GroupMessageRecord(
             id = nextGroupMessageId++,
@@ -265,6 +268,7 @@ internal class InMemoryPersistence : Persistence {
             storedAt = Clock.System.now().toString(),
             messageUuid = messageUuid,
             edited = false,
+            replyToUuid = replyToUuid,
         )
         groupMessages += groupId to msg
     }

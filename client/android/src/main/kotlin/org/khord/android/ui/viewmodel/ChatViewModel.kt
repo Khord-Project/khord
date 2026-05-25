@@ -162,7 +162,7 @@ class ChatViewModel(
         }
     }
 
-    fun send(text: String) {
+    fun send(text: String, replyToUuid: String? = null) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         // Don't even try if the contact is already known unavailable —
@@ -176,7 +176,7 @@ class ChatViewModel(
                     val contact = messaging.contacts().firstOrNull {
                         it.contactFingerprint == contactFingerprint
                     } ?: error("contact session not found")
-                    messaging.sendMessage(contact, trimmed)
+                    messaging.sendMessage(contact, trimmed, replyToUuid)
                     reloadHistoryLocked()
                 }.onFailure { e ->
                     if (looksLikeDeadContact(e)) {
