@@ -69,6 +69,8 @@ internal class InMemoryPersistence : Persistence {
             pendingPayload = existing?.pendingPayload,
             verified = existing?.verified ?: false,
             localDisplayName = existing?.localDisplayName,
+            blocked = existing?.blocked ?: false,
+            muted = existing?.muted ?: false,
         )
     }
     override suspend fun loadContact(fingerprint: String): ContactInfo? = contacts[fingerprint]
@@ -105,6 +107,17 @@ internal class InMemoryPersistence : Persistence {
             contacts[fingerprint] = it.copy(localDisplayName = normalised)
         }
     }
+
+    override suspend fun setContactBlocked(fingerprint: String, blocked: Boolean) {
+        contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(blocked = blocked) }
+    }
+
+    override suspend fun setContactMuted(fingerprint: String, muted: Boolean) {
+        contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(muted = muted) }
+    }
+
+    override suspend fun loadBlockedContacts(): List<ContactInfo> =
+        contacts.values.filter { it.blocked }
 
     override suspend fun deleteContact(fingerprint: String) {
         // Mirror the SQLDelight CASCADE behaviour by removing every

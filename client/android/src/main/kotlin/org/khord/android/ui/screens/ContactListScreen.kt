@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -491,6 +492,15 @@ private fun ConversationRow(
                         Icons.Filled.Verified,
                         contentDescription = "Verified",
                         tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                if (row.muted) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        Icons.Filled.NotificationsOff,
+                        contentDescription = "Muted",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )
                 }

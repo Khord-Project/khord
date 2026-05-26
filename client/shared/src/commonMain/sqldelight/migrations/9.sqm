@@ -1,0 +1,18 @@
+-- Migration from schema version 9 to 10.
+--
+-- Contact blocking + muting (#27). Both local-only, never
+-- transmitted; the counterparty is not told.
+--
+--   blocked — messages from this contact are dropped on receive
+--             (drained + acked off the relay so the mailbox doesn't
+--             fill, but not stored or shown); the contact is hidden
+--             from the list; sending to them is refused; their
+--             messages within a group are hidden locally.
+--   muted   — messages are received and stored normally and the
+--             contact stays in the list (with a muted indicator),
+--             but notifications are suppressed.
+--
+-- (Renumbered from 8.sqm → 9.sqm on rebase: the reply-to-message
+-- branch landed first and took 8.sqm for reply_to_uuid.)
+ALTER TABLE contact ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE contact ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;

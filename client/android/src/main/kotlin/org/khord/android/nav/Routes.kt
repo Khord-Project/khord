@@ -41,4 +41,7 @@ object Routes {
     // Routed from ChatScreen header and GroupInfoScreen member rows.
     const val FINGERPRINT_PATTERN = "contact/{fingerprint}/verify"
     fun fingerprint(fingerprint: String): String = "contact/$fingerprint/verify"
+
+    /** Settings → Blocked contacts list (#27). */
+    const val BLOCKED_CONTACTS = "contacts/blocked"
 }

@@ -24,6 +24,8 @@ class FingerprintViewModel(
         val contactDisplayName: String? = null,
         val myFingerprint: String? = null,
         val verified: Boolean = false,
+        val blocked: Boolean = false,
+        val muted: Boolean = false,
         /**
          * Set to a short confirmation string ("Contact verified ✓" /
          * "Verification removed") on the tick following a successful
@@ -48,6 +50,34 @@ class FingerprintViewModel(
                         ?: "",
                     myFingerprint = messaging.myFingerprint,
                     verified = messaging.isContactVerified(contactFingerprint),
+                    blocked = messaging.isContactBlocked(contactFingerprint),
+                    muted = messaging.isContactMuted(contactFingerprint),
+                )
+            }
+        }
+    }
+
+    fun setBlocked(blocked: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val messaging = AppContainer.messaging ?: return@launch
+            messaging.setContactBlocked(contactFingerprint, blocked)
+            _state.update {
+                it.copy(
+                    blocked = blocked,
+                    justUpdated = if (blocked) "Contact blocked" else "Contact unblocked",
+                )
+            }
+        }
+    }
+
+    fun setMuted(muted: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val messaging = AppContainer.messaging ?: return@launch
+            messaging.setContactMuted(contactFingerprint, muted)
+            _state.update {
+                it.copy(
+                    muted = muted,
+                    justUpdated = if (muted) "Contact muted" else "Contact unmuted",
                 )
             }
         }

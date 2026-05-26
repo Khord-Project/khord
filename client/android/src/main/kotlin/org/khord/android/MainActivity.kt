@@ -24,6 +24,7 @@ import org.khord.android.push.KhordNotifications
 import org.khord.android.ui.screens.AddContactScreen
 import org.khord.android.ui.screens.ChatScreen
 import org.khord.android.ui.screens.ContactListScreen
+import org.khord.android.ui.screens.BlockedContactsScreen
 import org.khord.android.ui.screens.FingerprintScreen
 import org.khord.android.ui.screens.CreateGroupScreen
 import org.khord.android.ui.screens.GroupChatScreen
@@ -156,5 +157,6 @@ private fun KhordNavGraph(
             val fp = backStackEntry.arguments?.getString("fingerprint") ?: return@composable
             FingerprintScreen(nav, contactFingerprint = fp)
         }
+        composable(Routes.BLOCKED_CONTACTS) { BlockedContactsScreen(nav) }
     }
 }

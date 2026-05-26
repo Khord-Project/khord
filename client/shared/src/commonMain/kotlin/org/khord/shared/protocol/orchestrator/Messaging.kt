@@ -607,6 +607,58 @@ class Messaging internal constructor(
     fun isContactVerified(fingerprint: String): Boolean =
         contactsByFingerprint[fingerprint]?.verified == true
 
+    // ── Blocking + muting (#27) ───────────────────────────────────────────────
+
+    /**
+     * Block / unblock a contact. Local-only, never transmitted. When
+     * blocked: inbound messages are dropped on receive (still drained
+     * + acked off the relay so the mailbox doesn't fill, but not
+     * stored or surfaced), they're hidden from the contact list (the
+     * UI filters by [isContactBlocked]), and [sendMessage] refuses to
+     * send. Their group messages are dropped locally too.
+     *
+     * We deliberately keep their push subscription alive (contacts()
+     * still returns them) so their relay mailbox keeps draining — the
+     * drop happens at the persist step, not the fetch step.
+     */
+    suspend fun setContactBlocked(fingerprint: String, blocked: Boolean) {
+        checkAlive()
+        val info = contactsByFingerprint[fingerprint] ?: return
+        contactsByFingerprint[fingerprint] = info.copy(blocked = blocked)
+        persistence.setContactBlocked(fingerprint, blocked)
+    }
+
+    fun isContactBlocked(fingerprint: String): Boolean =
+        contactsByFingerprint[fingerprint]?.blocked == true
+
+    /**
+     * Mute / unmute a contact. Local-only. Muted contacts' messages
+     * are received + stored normally and they stay in the list (with
+     * a muted indicator), but the push service suppresses their
+     * notifications.
+     */
+    suspend fun setContactMuted(fingerprint: String, muted: Boolean) {
+        checkAlive()
+        val info = contactsByFingerprint[fingerprint] ?: return
+        contactsByFingerprint[fingerprint] = info.copy(muted = muted)
+        persistence.setContactMuted(fingerprint, muted)
+    }
+
+    fun isContactMuted(fingerprint: String): Boolean =
+        contactsByFingerprint[fingerprint]?.muted == true
+
+    /** Blocked contacts, for the Settings → Blocked list. */
+    fun blockedContacts(): List<PendingContact> {
+        checkAlive()
+        return contactsByFingerprint.values
+            .filter { it.blocked }
+            .map {
+                val name = it.localDisplayName?.takeIf { n -> n.isNotBlank() }
+                    ?: it.displayName
+                PendingContact(it.qr.fingerprint, name)
+            }
+    }
+
     /**
      * Forget a contact entirely. Drops:
      *   - the in-memory [ContactSession] (so [contacts] and
@@ -904,6 +956,11 @@ class Messaging internal constructor(
         replyToUuid: String? = null,
     ): Long {
         checkAlive()
+        // Refuse to send to a blocked contact. The UI hides blocked
+        // contacts so this shouldn't be reachable, but guard anyway.
+        check(!isContactBlocked(contact.contactFingerprint)) {
+            "cannot send to a blocked contact"
+        }
         val timestamp = Clock.System.now().toString()
         // Stamp every outgoing message with a fresh UUID so the
         // recipient can persist the same identifier and a later
@@ -1064,15 +1121,25 @@ class Messaging internal constructor(
                     // throws on unknown types, which is the documented
                     // forward-compat behaviour.
                     val text = decodeInnerPayloadText(payload)
-                    plaintexts += text
-                    persistence.saveMessage(
-                        contactFingerprint = currentContact.contactFingerprint,
-                        direction = org.khord.shared.storage.MessageDirection.RECEIVED,
-                        body = text,
-                        timestamp = payload.timestamp,
-                        messageUuid = payload.messageUuid,
-                        replyToUuid = payload.replyToUuid,
-                    )
+                    // Blocked-contact drop: we've already fetched the
+                    // message off the relay (it'll be acked at the loop
+                    // end, clearing the server mailbox), but a blocked
+                    // sender's message is neither stored nor surfaced —
+                    // and crucially not added to `plaintexts`, so
+                    // handlePush sees nothing to notify about.
+                    if (contactsByFingerprint[currentContact.contactFingerprint]?.blocked == true) {
+                        // dropped
+                    } else {
+                        plaintexts += text
+                        persistence.saveMessage(
+                            contactFingerprint = currentContact.contactFingerprint,
+                            direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+                            body = text,
+                            timestamp = payload.timestamp,
+                            messageUuid = payload.messageUuid,
+                            replyToUuid = payload.replyToUuid,
+                        )
+                    }
                 }
             }
         }
@@ -1482,6 +1549,10 @@ class Messaging internal constructor(
     ) {
         val groupId = payload.groupId ?: return
         val body = payload.body ?: return
+        // Blocked group member: hide their messages locally. We still
+        // acked the envelope off the relay; we just don't store this
+        // into the group log. Other members are unaffected.
+        if (contactsByFingerprint[contact.contactFingerprint]?.blocked == true) return
         // Drop messages for groups we don't know about — likely the
         // invite arrived out of order or never reached us.
         val group = persistence.loadGroup(groupId) ?: return

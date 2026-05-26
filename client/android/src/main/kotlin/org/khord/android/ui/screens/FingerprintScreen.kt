@@ -78,6 +78,7 @@ fun FingerprintScreen(nav: NavController, contactFingerprint: String) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var showRename by remember { mutableStateOf(false) }
+    var showBlockConfirm by remember { mutableStateOf(false) }
 
     // Surface a brief snackbar confirmation when verified flips.
     LaunchedEffect(state.justUpdated) {
@@ -181,7 +182,62 @@ fun FingerprintScreen(nav: NavController, contactFingerprint: String) {
                 enabled = canAct,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Rename contact") }
+
+            // Mute toggle — no confirmation, it's reversible + harmless.
+            OutlinedButton(
+                onClick = { vm.setMuted(!state.muted) },
+                enabled = canAct,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (state.muted) "Unmute contact" else "Mute contact") }
+
+            // Block toggle — blocking asks for confirmation; unblocking
+            // is immediate. Error tint to signal the heavier action.
+            if (state.blocked) {
+                OutlinedButton(
+                    onClick = { vm.setBlocked(false) },
+                    enabled = canAct,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Unblock contact") }
+            } else {
+                OutlinedButton(
+                    onClick = { showBlockConfirm = true },
+                    enabled = canAct,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("Block contact") }
+            }
         }
+    }
+
+    if (showBlockConfirm) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showBlockConfirm = false },
+            title = { Text("Block ${state.contactDisplayName.orEmpty()}?") },
+            text = {
+                Text(
+                    "You won't receive their messages. They won't be notified.",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    showBlockConfirm = false
+                    vm.setBlocked(true)
+                    // Leave the screen — a blocked contact is hidden
+                    // from the list and their chat is no longer a place
+                    // the user should be sitting.
+                    nav.popBackStack()
+                }) {
+                    Text("Block", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    showBlockConfirm = false
+                }) { Text("Cancel") }
+            },
+        )
     }
 
     if (showRename) {

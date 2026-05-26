@@ -236,6 +236,15 @@ class KhordPushService : Service() {
             if (!messaging.isContactAccepted(contactFingerprint)) {
                 return@launch
             }
+            // Muted (or blocked) contacts: suppress the notification.
+            // (Blocked contacts shouldn't reach here — their messages
+            // are dropped in receiveMessages so `plaintexts` is empty
+            // and we already returned above — but guard for safety.)
+            if (messaging.isContactMuted(contactFingerprint) ||
+                messaging.isContactBlocked(contactFingerprint)
+            ) {
+                return@launch
+            }
             // Foregrounded-chat suppression: if the user is currently
             // looking at this contact's chat, the new message is
             // already rendered (via incomingMessageTick); a banner
