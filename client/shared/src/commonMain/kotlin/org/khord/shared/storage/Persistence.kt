@@ -112,6 +112,15 @@ internal interface Persistence {
      */
     suspend fun setContactLocalName(fingerprint: String, localName: String?)
 
+    /** Set/clear the block flag (#27). No-op for unknown fingerprints. */
+    suspend fun setContactBlocked(fingerprint: String, blocked: Boolean)
+
+    /** Set/clear the mute flag (#27). No-op for unknown fingerprints. */
+    suspend fun setContactMuted(fingerprint: String, muted: Boolean)
+
+    /** All blocked contacts — backs the Settings → Blocked list. */
+    suspend fun loadBlockedContacts(): List<ContactInfo>
+
     /**
      * Remove a contact and every record that depends on it: the
      * pairwise Double Ratchet session row, every persisted message,
@@ -309,6 +318,10 @@ internal data class ContactInfo(
      * `local_display_name` column.
      */
     val localDisplayName: String? = null,
+    /** Local-only block flag (#27). See Contact.sq. */
+    val blocked: Boolean = false,
+    /** Local-only mute flag (#27). See Contact.sq. */
+    val muted: Boolean = false,
 )
 
 internal enum class ContactStatus {

@@ -49,6 +49,8 @@ class ContactListViewModel : ViewModel() {
          * verification UI is out of scope for the messenger row).
          */
         val verified: Boolean = false,
+        /** Muted indicator (#27). Contact rows only. */
+        val muted: Boolean = false,
     ) {
         enum class Kind { Contact, Group }
 
@@ -172,6 +174,11 @@ class ContactListViewModel : ViewModel() {
                     // mirrors this in handlePush (no banner for pending).
                     val contactRows = messaging.contacts()
                         .filter { messaging.isContactAccepted(it.contactFingerprint) }
+                        // Blocked contacts are hidden from the list (#27).
+                        // Their mailbox still drains (contacts() keeps
+                        // returning them for the push subscription); we
+                        // only hide the row.
+                        .filter { !messaging.isContactBlocked(it.contactFingerprint) }
                         .map { contact ->
                         val history = messaging.messageHistory(contact.contactFingerprint)
                         val last = history.lastOrNull()
@@ -185,6 +192,7 @@ class ContactListViewModel : ViewModel() {
                         val isUnavailable = (failures[contact.contactFingerprint] ?: 0) >=
                             AppContainer.DEAD_CONTACT_THRESHOLD
                         val verified = messaging.isContactVerified(contact.contactFingerprint)
+                        val muted = messaging.isContactMuted(contact.contactFingerprint)
                         Row(
                             id = contact.contactFingerprint,
                             kind = Row.Kind.Contact,
@@ -193,6 +201,7 @@ class ContactListViewModel : ViewModel() {
                             lastTimestamp = last?.timestamp,
                             unavailable = isUnavailable,
                             verified = verified,
+                            muted = muted,
                         )
                     }
                     // Groups (ADR 023) — listed alongside contacts. Last

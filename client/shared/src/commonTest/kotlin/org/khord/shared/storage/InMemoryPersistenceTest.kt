@@ -335,6 +335,35 @@ class InMemoryPersistenceTest {
     }
 
     @Test
+    fun blocked_and_muted_round_trip_and_preserved_on_upsert() = runTest {
+        val p = InMemoryPersistence()
+        val fp = "b".repeat(64)
+        val qr = QrPayload(
+            identityKey = "AAAA", fingerprint = fp,
+            keyServer = "x", relayServer = "y",
+            relayMailbox = "m" + "0".repeat(21),
+        )
+        p.saveContact(qr, "Mallory")
+        assertEquals(false, p.loadContact(fp)!!.blocked)
+        assertEquals(false, p.loadContact(fp)!!.muted)
+        assertEquals(0, p.loadBlockedContacts().size)
+
+        p.setContactBlocked(fp, true)
+        p.setContactMuted(fp, true)
+        assertTrue(p.loadContact(fp)!!.blocked)
+        assertTrue(p.loadContact(fp)!!.muted)
+        assertEquals(listOf(fp), p.loadBlockedContacts().map { it.qr.fingerprint })
+
+        // Re-upsert preserves both flags.
+        p.saveContact(qr, "Mallory v2")
+        assertTrue(p.loadContact(fp)!!.blocked)
+        assertTrue(p.loadContact(fp)!!.muted)
+
+        p.setContactBlocked(fp, false)
+        assertEquals(0, p.loadBlockedContacts().size)
+    }
+
+    @Test
     fun panic_wipes_everything() = runTest {
         val p = InMemoryPersistence()
         val id = aliceIdentity()

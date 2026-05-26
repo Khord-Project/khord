@@ -146,47 +146,66 @@ internal class DbPersistence(
                 pending_payload = existing?.pending_payload,
                 verified = existing?.verified ?: 0L,
                 local_display_name = existing?.local_display_name,
+                blocked = existing?.blocked ?: 0L,
+                muted = existing?.muted ?: 0L,
             )
         }
     }
 
+    private fun rowToContactInfo(
+        fingerprint: String, ed25519Public: ByteArray, keyServerUrl: String,
+        relayServerUrl: String, contactMailbox: String, displayNameCol: String,
+        statusCol: String, pendingPayload: String?, verifiedCol: Long,
+        localDisplayName: String?, blockedCol: Long, mutedCol: Long,
+    ): ContactInfo = ContactInfo(
+        qr = rowToQr(fingerprint, ed25519Public, keyServerUrl, relayServerUrl, contactMailbox),
+        displayName = displayNameCol,
+        status = ContactStatus.fromWire(statusCol),
+        pendingPayload = pendingPayload,
+        verified = verifiedCol != 0L,
+        localDisplayName = localDisplayName,
+        blocked = blockedCol != 0L,
+        muted = mutedCol != 0L,
+    )
+
     override suspend fun loadContact(fingerprint: String): ContactInfo? {
         val row = db.contactQueries
             .selectContactByFingerprint(fingerprint).executeAsOneOrNull() ?: return null
-        return ContactInfo(
-            qr = rowToQr(row.fingerprint, row.ed25519_public, row.key_server_url,
-                         row.relay_server_url, row.contact_mailbox),
-            displayName = row.display_name,
-            status = ContactStatus.fromWire(row.status),
-            pendingPayload = row.pending_payload,
-            verified = row.verified != 0L,
-            localDisplayName = row.local_display_name,
+        return rowToContactInfo(
+            row.fingerprint, row.ed25519_public, row.key_server_url,
+            row.relay_server_url, row.contact_mailbox, row.display_name,
+            row.status, row.pending_payload, row.verified,
+            row.local_display_name, row.blocked, row.muted,
         )
     }
 
     override suspend fun loadAllContacts(): List<ContactInfo> =
         db.contactQueries.selectAllContacts().executeAsList().map {
-            ContactInfo(
-                qr = rowToQr(it.fingerprint, it.ed25519_public, it.key_server_url,
-                             it.relay_server_url, it.contact_mailbox),
-                displayName = it.display_name,
-                status = ContactStatus.fromWire(it.status),
-                pendingPayload = it.pending_payload,
-                verified = it.verified != 0L,
-                localDisplayName = it.local_display_name,
+            rowToContactInfo(
+                it.fingerprint, it.ed25519_public, it.key_server_url,
+                it.relay_server_url, it.contact_mailbox, it.display_name,
+                it.status, it.pending_payload, it.verified,
+                it.local_display_name, it.blocked, it.muted,
             )
         }
 
     override suspend fun loadPendingContacts(): List<ContactInfo> =
         db.contactQueries.selectPendingContacts().executeAsList().map {
-            ContactInfo(
-                qr = rowToQr(it.fingerprint, it.ed25519_public, it.key_server_url,
-                             it.relay_server_url, it.contact_mailbox),
-                displayName = it.display_name,
-                status = ContactStatus.fromWire(it.status),
-                pendingPayload = it.pending_payload,
-                verified = it.verified != 0L,
-                localDisplayName = it.local_display_name,
+            rowToContactInfo(
+                it.fingerprint, it.ed25519_public, it.key_server_url,
+                it.relay_server_url, it.contact_mailbox, it.display_name,
+                it.status, it.pending_payload, it.verified,
+                it.local_display_name, it.blocked, it.muted,
+            )
+        }
+
+    override suspend fun loadBlockedContacts(): List<ContactInfo> =
+        db.contactQueries.selectBlockedContacts().executeAsList().map {
+            rowToContactInfo(
+                it.fingerprint, it.ed25519_public, it.key_server_url,
+                it.relay_server_url, it.contact_mailbox, it.display_name,
+                it.status, it.pending_payload, it.verified,
+                it.local_display_name, it.blocked, it.muted,
             )
         }
 
@@ -213,6 +232,14 @@ internal class DbPersistence(
     override suspend fun setContactLocalName(fingerprint: String, localName: String?) {
         val normalised = localName?.takeIf { it.isNotBlank() }?.trim()
         db.contactQueries.setContactLocalName(normalised, fingerprint)
+    }
+
+    override suspend fun setContactBlocked(fingerprint: String, blocked: Boolean) {
+        db.contactQueries.setContactBlocked(if (blocked) 1L else 0L, fingerprint)
+    }
+
+    override suspend fun setContactMuted(fingerprint: String, muted: Boolean) {
+        db.contactQueries.setContactMuted(if (muted) 1L else 0L, fingerprint)
     }
 
     override suspend fun deleteContact(fingerprint: String) {

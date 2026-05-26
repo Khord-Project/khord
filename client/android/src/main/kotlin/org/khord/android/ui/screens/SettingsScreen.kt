@@ -48,6 +48,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import org.khord.android.AppContainer
 import org.khord.android.BuildConfig
+import org.khord.android.nav.Routes
 import org.khord.android.ui.theme.KhordThemeChoice
 import org.khord.android.ui.theme.swatchColor
 import org.khord.android.ui.viewmodel.SettingsViewModel
@@ -114,6 +115,18 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
                 // to each other.
                 ServerHealthRow("Key server", state.keyServerUrl, state.keyServerHealth)
                 ServerHealthRow("Relay server", state.relayServerUrl, state.relayServerHealth)
+
+                Spacer(Modifier.height(16.dp))
+
+                Text("Privacy", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Blocked contacts",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { nav.navigate(Routes.BLOCKED_CONTACTS) }
+                        .padding(vertical = 8.dp),
+                )
 
                 Spacer(Modifier.height(16.dp))
 
