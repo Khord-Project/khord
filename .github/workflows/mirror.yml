@@ -1,0 +1,30 @@
+# Mirror every branch + tag push to the Codeberg mirror
+# (codeberg.org/khord/khord). One-way GitHub → Codeberg sync so the
+# project survives a GitHub-side outage or account action. Requires a
+# repo secret CODEBERG_TOKEN — a Codeberg access token with write
+# scope on the mirror repo.
+name: Mirror to Codeberg
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history (and all refs) so the force-push mirrors the
+          # complete repo, not just the shallow tip.
+          fetch-depth: 0
+      - name: Push to Codeberg
+        # Pass the token via env rather than interpolating the secret
+        # straight into the run-script command line — keeps it out of
+        # the rendered command and avoids any shell-quoting edge cases.
+        env:
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+        run: |
+          git remote add codeberg "https://${CODEBERG_TOKEN}@codeberg.org/khord/khord.git"
+          git push codeberg --all --force
+          git push codeberg --tags --force
