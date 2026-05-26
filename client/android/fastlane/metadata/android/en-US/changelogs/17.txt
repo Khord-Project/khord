@@ -1,0 +1,7 @@
+- Contact fingerprint verification with key-change warnings
+- Group rename (admin) and per-contact local nicknames
+- Incognito keyboard on the message composer
+- Server status indicator in Settings
+- Scrollable Settings; correct chat routing from notifications
+- Foreground service migrated to specialUse (fixes a background
+  timeout crash on Android 14+)
