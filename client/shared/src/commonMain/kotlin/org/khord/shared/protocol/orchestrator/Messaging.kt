@@ -898,7 +898,11 @@ class Messaging internal constructor(
     }
 
     /** Send a text message to the contact this session is bound to. */
-    suspend fun sendMessage(contact: ContactSession, text: String): Long {
+    suspend fun sendMessage(
+        contact: ContactSession,
+        text: String,
+        replyToUuid: String? = null,
+    ): Long {
         checkAlive()
         val timestamp = Clock.System.now().toString()
         // Stamp every outgoing message with a fresh UUID so the
@@ -915,6 +919,7 @@ class Messaging internal constructor(
             timestamp = timestamp,
             body = text,
             messageUuid = messageUuid,
+            replyToUuid = replyToUuid,
             replyInfo = ReplyInfo(
                 mailbox = contact.inboundMailboxId,
                 relayServer = relayServerUrl,
@@ -949,6 +954,7 @@ class Messaging internal constructor(
             body = text,
             timestamp = timestamp,
             messageUuid = messageUuid,
+            replyToUuid = replyToUuid,
         )
         persistSession(contact)
 
@@ -1065,6 +1071,7 @@ class Messaging internal constructor(
                         body = text,
                         timestamp = payload.timestamp,
                         messageUuid = payload.messageUuid,
+                        replyToUuid = payload.replyToUuid,
                     )
                 }
             }
@@ -1164,7 +1171,11 @@ class Messaging internal constructor(
      * member with an active [ContactSession]. Members without a session
      * are silently skipped (per ADR 023).
      */
-    suspend fun sendGroupMessage(groupId: String, text: String) {
+    suspend fun sendGroupMessage(
+        groupId: String,
+        text: String,
+        replyToUuid: String? = null,
+    ) {
         checkAlive()
         require(text.isNotBlank()) { "text must be non-blank" }
         val group = persistence.loadGroup(groupId)
@@ -1187,6 +1198,7 @@ class Messaging internal constructor(
                     timestamp = timestamp,
                     body = text,
                     messageUuid = messageUuid,
+                    replyToUuid = replyToUuid,
                     replyInfo = myReplyInfo(contact.inboundMailboxId),
                     groupId = groupId,
                 ),
@@ -1201,6 +1213,7 @@ class Messaging internal constructor(
             timestamp = timestamp,
             direction = org.khord.shared.storage.MessageDirection.SENT,
             messageUuid = messageUuid,
+            replyToUuid = replyToUuid,
         )
         // Read-mod-write: groupName access not needed here, but keep
         // `group` local in case future logic on this branch needs it.
@@ -1484,6 +1497,7 @@ class Messaging internal constructor(
             timestamp = payload.timestamp,
             direction = org.khord.shared.storage.MessageDirection.RECEIVED,
             messageUuid = payload.messageUuid,
+            replyToUuid = payload.replyToUuid,
         )
         // Also keep the per-member display_name in sync — fresh info.
         if (senderName.isNotEmpty()) {
@@ -1864,6 +1878,7 @@ class Messaging internal constructor(
                 timestamp = it.timestamp,
                 messageUuid = it.messageUuid,
                 edited = it.edited,
+                replyToUuid = it.replyToUuid,
             )
         }
     }
@@ -2057,6 +2072,12 @@ data class MessageEntry(
      * when true.
      */
     val edited: Boolean = false,
+    /**
+     * If this message is a quote-reply, the [messageUuid] of the
+     * message it replies to. The UI resolves the quoted text by
+     * finding that UUID in the loaded history. Null = not a reply.
+     */
+    val replyToUuid: String? = null,
 ) {
     enum class Direction { SENT, RECEIVED }
 }
@@ -2088,6 +2109,7 @@ data class GroupMessageEntry(
     val direction: MessageEntry.Direction,
     val messageUuid: String? = null,
     val edited: Boolean = false,
+    val replyToUuid: String? = null,
 )
 
 internal fun org.khord.shared.storage.GroupRecord.toEntry(): GroupEntry =
@@ -2113,6 +2135,7 @@ internal fun org.khord.shared.storage.GroupMessageRecord.toEntry(): GroupMessage
             MessageEntry.Direction.SENT else MessageEntry.Direction.RECEIVED,
         messageUuid = messageUuid,
         edited = edited,
+        replyToUuid = replyToUuid,
     )
 
 // Tiny helper: exposed only so Messaging can validate QR payload bindings without

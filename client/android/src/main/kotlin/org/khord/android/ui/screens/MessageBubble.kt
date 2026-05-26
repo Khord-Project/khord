@@ -7,9 +7,17 @@ import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -30,7 +38,9 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import org.khord.android.ui.theme.LocalKhordChatColors
@@ -59,6 +69,19 @@ import org.khord.android.ui.theme.LocalKhordChatColors
  *
  * Future enhancements (Reply, Reactions) land once here.
  */
+/**
+ * Resolved quote shown inside a reply's bubble: the original sender's
+ * label + a (truncated) snippet of their text. [found] is false when
+ * the referenced message couldn't be located locally (deleted, or
+ * pre-UUID) — the bubble then renders a muted "Original message"
+ * placeholder.
+ */
+data class QuotedPreview(
+    val senderLabel: String,
+    val snippet: String,
+    val found: Boolean,
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(
@@ -66,6 +89,9 @@ fun MessageBubble(
     isSent: Boolean,
     messageUuid: String? = null,
     onEdit: ((uuid: String, body: String) -> Unit)? = null,
+    onReply: ((uuid: String, body: String) -> Unit)? = null,
+    quoted: QuotedPreview? = null,
+    onQuotedTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val chat = LocalKhordChatColors.current
@@ -74,6 +100,7 @@ fun MessageBubble(
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
     val canEdit = isSent && messageUuid != null && onEdit != null
+    val canReply = messageUuid != null && onReply != null
 
     Box(
         modifier = modifier
@@ -86,11 +113,19 @@ fun MessageBubble(
             )
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        Text(
-            text = remember(body, fg) { linkify(body, fg) },
-            style = MaterialTheme.typography.bodyMedium,
-            color = fg,
-        )
+        Column {
+            // Quote block at the top of the bubble when this message
+            // is a reply. Tappable to jump to the original.
+            if (quoted != null) {
+                QuoteBlock(quoted, fg, onQuotedTap)
+                Spacer(Modifier.height(4.dp))
+            }
+            Text(
+                text = remember(body, fg) { linkify(body, fg) },
+                style = MaterialTheme.typography.bodyMedium,
+                color = fg,
+            )
+        }
         DropdownMenu(
             expanded = menuOpen,
             onDismissRequest = { menuOpen = false },
@@ -108,6 +143,15 @@ fun MessageBubble(
                     }
                 },
             )
+            if (canReply) {
+                DropdownMenuItem(
+                    text = { Text("Reply") },
+                    onClick = {
+                        menuOpen = false
+                        onReply!!(messageUuid!!, body)
+                    },
+                )
+            }
             if (canEdit) {
                 DropdownMenuItem(
                     text = { Text("Edit") },
@@ -117,6 +161,49 @@ fun MessageBubble(
                     },
                 )
             }
+        }
+    }
+}
+
+/**
+ * The quote card rendered at the top of a reply bubble. A thin
+ * left accent bar + sender label + one-line snippet, all in a
+ * slightly-dimmed tint of the bubble's foreground colour.
+ */
+@Composable
+private fun QuoteBlock(
+    quoted: QuotedPreview,
+    fg: Color,
+    onTap: (() -> Unit)?,
+) {
+    val dim = fg.copy(alpha = 0.7f)
+    Row(
+        modifier = (if (onTap != null) Modifier.clickable { onTap() } else Modifier)
+            .height(IntrinsicSize.Min),
+    ) {
+        // Left accent bar — matches the text column's height via the
+        // Row's IntrinsicSize.Min.
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(dim),
+        )
+        Spacer(Modifier.width(6.dp))
+        Column {
+            Text(
+                quoted.senderLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = dim,
+            )
+            Text(
+                if (quoted.found) quoted.snippet else "Original message",
+                style = MaterialTheme.typography.bodySmall,
+                color = dim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontStyle = if (quoted.found) null else FontStyle.Italic,
+            )
         }
     }
 }

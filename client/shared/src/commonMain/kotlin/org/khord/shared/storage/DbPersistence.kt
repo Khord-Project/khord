@@ -317,6 +317,7 @@ internal class DbPersistence(
         body: String,
         timestamp: String,
         messageUuid: String?,
+        replyToUuid: String?,
     ) {
         db.messageQueries.insertMessage(
             contact_fingerprint = contactFingerprint,
@@ -325,6 +326,7 @@ internal class DbPersistence(
             timestamp = timestamp,
             stored_at = now(),
             message_uuid = messageUuid,
+            reply_to_uuid = replyToUuid,
         )
     }
 
@@ -338,6 +340,7 @@ internal class DbPersistence(
                 storedAt = it.stored_at,
                 messageUuid = it.message_uuid,
                 edited = it.edited != 0L,
+                replyToUuid = it.reply_to_uuid,
             )
         }
 
@@ -444,6 +447,7 @@ internal class DbPersistence(
         timestamp: String,
         direction: MessageDirection,
         messageUuid: String?,
+        replyToUuid: String?,
     ) {
         db.groupMessageQueries.insertGroupMessage(
             group_id = groupId,
@@ -454,6 +458,7 @@ internal class DbPersistence(
             direction = direction.wire,
             stored_at = now(),
             message_uuid = messageUuid,
+            reply_to_uuid = replyToUuid,
         )
     }
 
@@ -486,6 +491,7 @@ internal class DbPersistence(
                 storedAt = it.stored_at,
                 messageUuid = it.message_uuid,
                 edited = it.edited != 0L,
+                replyToUuid = it.reply_to_uuid,
             )
         }
 

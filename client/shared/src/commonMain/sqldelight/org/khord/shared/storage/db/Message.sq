@@ -16,7 +16,11 @@ CREATE TABLE message (
     -- UI surfaces a "(edited)" badge under bubbles where this is 1.
     -- INTEGER rather than BOOLEAN because SQLite (and SQLDelight)
     -- doesn't distinguish; 0/1 is the canonical representation.
-    edited              INTEGER NOT NULL DEFAULT 0
+    edited              INTEGER NOT NULL DEFAULT 0,
+    -- message_uuid of the message this one replies to (quote-reply,
+    -- #61). Nullable; null = not a reply. Quoted text is resolved
+    -- locally by UUID at render time, never carried on the wire.
+    reply_to_uuid       TEXT
 );
 
 CREATE INDEX message_by_contact ON message(contact_fingerprint, id);
@@ -25,17 +29,17 @@ CREATE INDEX message_by_uuid ON message(message_uuid);
 insertMessage:
 INSERT INTO message(
     contact_fingerprint, direction, body, timestamp, stored_at,
-    message_uuid
-) VALUES (?, ?, ?, ?, ?, ?);
+    message_uuid, reply_to_uuid
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 
 selectMessagesByContact:
-SELECT id, direction, body, timestamp, stored_at, message_uuid, edited
+SELECT id, direction, body, timestamp, stored_at, message_uuid, edited, reply_to_uuid
   FROM message
  WHERE contact_fingerprint = ?
  ORDER BY id ASC;
 
 selectMessageByUuid:
-SELECT id, contact_fingerprint, direction, body, timestamp, message_uuid, edited
+SELECT id, contact_fingerprint, direction, body, timestamp, message_uuid, edited, reply_to_uuid
   FROM message
  WHERE message_uuid = ?
  LIMIT 1;

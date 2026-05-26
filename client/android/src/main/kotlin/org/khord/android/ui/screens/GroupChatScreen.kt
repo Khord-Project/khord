@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +39,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import kotlinx.coroutines.launch
 import org.khord.android.nav.Routes
 import org.khord.android.ui.viewmodel.GroupChatViewModel
 import org.khord.android.util.TimestampFormat
@@ -110,6 +112,8 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
         },
     ) { padding ->
         var editingUuid by remember { mutableStateOf<String?>(null) }
+        var replyTo by remember { mutableStateOf<GroupReplyTarget?>(null) }
+        val scope = rememberCoroutineScope()
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -123,11 +127,43 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                     if (showDateHeader) {
                         GroupDateSeparator(msg.timestamp)
                     }
+                    val quoted = msg.replyToUuid?.let { ruid ->
+                        val orig = state.messages.firstOrNull { it.messageUuid == ruid }
+                        if (orig != null) {
+                            val label = if (orig.direction == MessageEntry.Direction.SENT) {
+                                "You"
+                            } else {
+                                orig.senderDisplayName.ifEmpty {
+                                    orig.senderFingerprint.take(8)
+                                }
+                            }
+                            QuotedPreview(label, orig.body.take(60), found = true)
+                        } else {
+                            QuotedPreview("", "", found = false)
+                        }
+                    }
                     GroupMessageRow(
                         msg = msg,
+                        quoted = quoted,
                         onEdit = { uuid, body ->
                             editingUuid = uuid
                             draft = body
+                        },
+                        onReply = { uuid, body ->
+                            val label = if (msg.direction == MessageEntry.Direction.SENT) {
+                                "You"
+                            } else {
+                                msg.senderDisplayName.ifEmpty { msg.senderFingerprint.take(8) }
+                            }
+                            replyTo = GroupReplyTarget(uuid, label, body.take(60))
+                        },
+                        onQuotedTap = {
+                            val origIdx = state.messages.indexOfFirst {
+                                it.messageUuid == msg.replyToUuid
+                            }
+                            if (origIdx >= 0) {
+                                scope.launch { listState.animateScrollToItem(origIdx) }
+                            }
                         },
                     )
                 }
@@ -179,6 +215,32 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                     }) { Text("Cancel") }
                 }
             }
+            replyTo?.let { rt ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Replying to ${rt.label}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            rt.snippet,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                    androidx.compose.material3.TextButton(onClick = {
+                        replyTo = null
+                    }) { Text("Cancel") }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -205,7 +267,8 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                             vm.edit(uuid, draft)
                             editingUuid = null
                         } else {
-                            vm.send(draft)
+                            vm.send(draft, replyTo?.uuid)
+                            replyTo = null
                         }
                         draft = ""
                     },
@@ -231,10 +294,16 @@ private fun GroupDateSeparator(iso: String) {
     }
 }
 
+/** A group message the user is composing a reply to (compose banner). */
+private data class GroupReplyTarget(val uuid: String, val label: String, val snippet: String)
+
 @Composable
 private fun GroupMessageRow(
     msg: GroupMessageEntry,
+    quoted: QuotedPreview?,
     onEdit: (uuid: String, body: String) -> Unit,
+    onReply: (uuid: String, body: String) -> Unit,
+    onQuotedTap: () -> Unit,
 ) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val align = if (isSent) Alignment.End else Alignment.Start
@@ -260,6 +329,9 @@ private fun GroupMessageRow(
                 isSent = isSent,
                 messageUuid = msg.messageUuid,
                 onEdit = onEdit,
+                onReply = onReply,
+                quoted = quoted,
+                onQuotedTap = onQuotedTap,
             )
         }
         val timestampLabel = TimestampFormat.formatMessageTime(msg.timestamp)

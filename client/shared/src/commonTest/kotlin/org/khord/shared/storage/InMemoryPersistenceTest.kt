@@ -313,6 +313,28 @@ class InMemoryPersistenceTest {
     }
 
     @Test
+    fun reply_to_uuid_round_trips_on_message_and_group_message() = runTest {
+        val p = InMemoryPersistence()
+        val fp = "r".repeat(64)
+        p.saveMessage(fp, MessageDirection.SENT, "original", "t1", messageUuid = "uuid-A")
+        p.saveMessage(
+            fp, MessageDirection.SENT, "the reply", "t2",
+            messageUuid = "uuid-B", replyToUuid = "uuid-A",
+        )
+        val msgs = p.loadMessages(fp)
+        assertNull(msgs[0].replyToUuid)
+        assertEquals("uuid-A", msgs[1].replyToUuid)
+
+        val gid = "abcd".repeat(8)
+        p.saveGroup(gid, "G", createdByFingerprint = "a".repeat(64), isAdmin = true)
+        p.saveGroupMessage(
+            gid, "a".repeat(64), "Alice", "g reply", "t3",
+            MessageDirection.SENT, messageUuid = "guuid-B", replyToUuid = "guuid-A",
+        )
+        assertEquals("guuid-A", p.loadGroupMessages(gid).single().replyToUuid)
+    }
+
+    @Test
     fun panic_wipes_everything() = runTest {
         val p = InMemoryPersistence()
         val id = aliceIdentity()
