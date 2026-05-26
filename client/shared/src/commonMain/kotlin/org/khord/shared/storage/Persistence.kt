@@ -231,6 +231,14 @@ internal interface Persistence {
 
     suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord>
 
+    /**
+     * Full-text search (FTS5) across all 1:1 + group message bodies
+     * (#60). [query] is a raw user string; the implementation wraps
+     * it into an FTS5 prefix MATCH. System messages are excluded.
+     * Returns newest-first, capped. Local-only — never hits a server.
+     */
+    suspend fun searchMessages(query: String): List<SearchResult>
+
     /** Group equivalent of [findMessageByUuid]. */
     suspend fun findGroupMessageByUuid(messageUuid: String): GroupMessageLookup?
 
@@ -360,6 +368,21 @@ internal data class SessionRecord(
 )
 
 internal enum class MessageDirection { SENT, RECEIVED }
+
+/**
+ * One full-text search hit (#60). [conversationId] is a contact
+ * fingerprint for 1:1 hits or a group_id for group hits;
+ * [isGroup] disambiguates so the UI can route the tap to the right
+ * chat screen. [conversationLabel] is the contact/group display
+ * name (caller may further apply nickname overrides).
+ */
+internal data class SearchResult(
+    val conversationId: String,
+    val conversationLabel: String,
+    val isGroup: Boolean,
+    val body: String,
+    val timestamp: String,
+)
 
 internal data class StoredMessage(
     val id: Long,

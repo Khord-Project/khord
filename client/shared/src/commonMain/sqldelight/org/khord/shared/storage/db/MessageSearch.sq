@@ -1,0 +1,81 @@
+-- Full-text search over message bodies (#60). Two external-content
+-- FTS5 indexes — one mirroring `message` (1:1), one mirroring
+-- `group_message` — kept in sync by AFTER INSERT/UPDATE/DELETE
+-- triggers. content='...' + content_rowid='id' means the FTS table
+-- stores only the index, not a copy of the body (the body already
+-- lives in the source table inside the encrypted DB).
+--
+-- FTS5 is compiled into both drivers Khord uses: net.zetetic
+-- sqlcipher-android 4.x (SQLITE_ENABLE_FTS5) and xerial sqlite-jdbc
+-- (FTS5 on by default).
+--
+-- System messages (session-reset markers, verification-reset
+-- notices) are excluded at QUERY time rather than at index time —
+-- see the NOT LIKE filters in the search queries. Indexing them is
+-- harmless; we just don't want them in results.
+
+CREATE VIRTUAL TABLE message_fts USING fts5(
+    body,
+    content='message',
+    content_rowid='id'
+);
+
+CREATE TRIGGER message_fts_insert AFTER INSERT ON message BEGIN
+    INSERT INTO message_fts(rowid, body) VALUES (new.id, new.body);
+END;
+CREATE TRIGGER message_fts_delete AFTER DELETE ON message BEGIN
+    INSERT INTO message_fts(message_fts, rowid, body) VALUES ('delete', old.id, old.body);
+END;
+CREATE TRIGGER message_fts_update AFTER UPDATE ON message BEGIN
+    INSERT INTO message_fts(message_fts, rowid, body) VALUES ('delete', old.id, old.body);
+    INSERT INTO message_fts(rowid, body) VALUES (new.id, new.body);
+END;
+
+CREATE VIRTUAL TABLE group_message_fts USING fts5(
+    body,
+    content='group_message',
+    content_rowid='id'
+);
+
+CREATE TRIGGER group_message_fts_insert AFTER INSERT ON group_message BEGIN
+    INSERT INTO group_message_fts(rowid, body) VALUES (new.id, new.body);
+END;
+CREATE TRIGGER group_message_fts_delete AFTER DELETE ON group_message BEGIN
+    INSERT INTO group_message_fts(group_message_fts, rowid, body) VALUES ('delete', old.id, old.body);
+END;
+CREATE TRIGGER group_message_fts_update AFTER UPDATE ON group_message BEGIN
+    INSERT INTO group_message_fts(group_message_fts, rowid, body) VALUES ('delete', old.id, old.body);
+    INSERT INTO group_message_fts(rowid, body) VALUES (new.id, new.body);
+END;
+
+-- 1:1 search. Joins the FTS hit back to the message + its contact
+-- for display name. Excludes the two known system-message bodies.
+searchMessages:
+SELECT m.contact_fingerprint AS fingerprint,
+       c.display_name        AS display_name,
+       c.local_display_name  AS local_display_name,
+       m.body                AS body,
+       m.timestamp           AS timestamp
+  FROM message_fts f
+  JOIN message m ON m.id = f.rowid
+  JOIN contact c ON c.fingerprint = m.contact_fingerprint
+ WHERE message_fts MATCH :query
+   AND m.body NOT LIKE '🔄 Session reset%'
+   AND m.body NOT LIKE 'Security verification has been reset.%'
+ ORDER BY m.timestamp DESC
+ LIMIT 100;
+
+-- Group search. Joins back to the group_message + its group for the
+-- group name.
+searchGroupMessages:
+SELECT gm.group_id            AS group_id,
+       g.group_name           AS group_name,
+       gm.sender_display_name AS sender_display_name,
+       gm.body                AS body,
+       gm.timestamp           AS timestamp
+  FROM group_message_fts f
+  JOIN group_message gm ON gm.id = f.rowid
+  JOIN "group" g ON g.group_id = gm.group_id
+ WHERE group_message_fts MATCH :query
+ ORDER BY gm.timestamp DESC
+ LIMIT 100;

@@ -411,6 +411,48 @@ class DbPersistenceTest {
     }
 
     @Test
+    fun fts5_search_finds_matching_messages_and_excludes_system_markers() = runTest {
+        val p = openTestDb()
+        try {
+            val fp = "5".repeat(64)
+            p.saveContact(QrPayload(
+                identityKey = "AAAA", fingerprint = fp,
+                keyServer = "x", relayServer = "y",
+                relayMailbox = "mailbox-id-22-chars-5555",
+            ), "Alice")
+            p.saveMessage(fp, MessageDirection.SENT, "let's meet at the harbour", "t1")
+            p.saveMessage(fp, MessageDirection.RECEIVED, "sounds good, harbour it is", "t2")
+            p.saveMessage(fp, MessageDirection.RECEIVED, "totally unrelated text", "t3")
+            // A system message must NOT show up in results.
+            p.saveMessage(
+                fp, MessageDirection.RECEIVED,
+                "🔄 Session reset — the other party may have re-installed Khord", "t4",
+            )
+
+            // FTS5 prefix match on "harb" should hit the two harbour msgs.
+            val hits = p.searchMessages("harb")
+            assertEquals(2, hits.size)
+            assertTrue(hits.all { it.body.contains("harbour") })
+            assertTrue(hits.none { it.body.contains("Session reset") })
+            assertTrue(hits.all { !it.isGroup && it.conversationId == fp })
+
+            // A term that matches only the system marker returns nothing
+            // (it's excluded) — "reinstalled" isn't in any real message.
+            assertEquals(0, p.searchMessages("unrelatedXYZ").size)
+
+            // Group search path.
+            val gid = "5678".repeat(8)
+            p.saveGroup(gid, "Sailing Club", createdByFingerprint = fp, isAdmin = false)
+            p.saveGroupMessage(gid, fp, "Alice", "anyone sailing this weekend?", "t5",
+                MessageDirection.RECEIVED)
+            val groupHits = p.searchMessages("sailing")
+            assertTrue(groupHits.any { it.isGroup && it.conversationId == gid })
+        } finally {
+            p.close()
+        }
+    }
+
+    @Test
     fun messages_preserve_order_under_load() = runTest {
         val p = openTestDb()
         try {
