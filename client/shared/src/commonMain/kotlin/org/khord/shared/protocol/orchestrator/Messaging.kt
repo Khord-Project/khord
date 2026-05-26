@@ -660,6 +660,25 @@ class Messaging internal constructor(
     }
 
     /**
+     * Full-text search across all local message history (#60).
+     * Local-only (FTS5 over the encrypted DB); never touches a
+     * server. Empty/blank query returns empty list.
+     */
+    suspend fun searchMessages(query: String): List<MessageSearchResult> {
+        checkAlive()
+        if (query.isBlank()) return emptyList()
+        return persistence.searchMessages(query).map {
+            MessageSearchResult(
+                conversationId = it.conversationId,
+                conversationLabel = it.conversationLabel,
+                isGroup = it.isGroup,
+                snippet = it.body,
+                timestamp = it.timestamp,
+            )
+        }
+    }
+
+    /**
      * Forget a contact entirely. Drops:
      *   - the in-memory [ContactSession] (so [contacts] and
      *     [pushSubscriptions] both stop returning this fingerprint
@@ -2181,6 +2200,19 @@ data class GroupMessageEntry(
     val messageUuid: String? = null,
     val edited: Boolean = false,
     val replyToUuid: String? = null,
+)
+
+/**
+ * One full-text search hit (#60). [conversationId] is a contact
+ * fingerprint (1:1) or group_id (group); [isGroup] disambiguates
+ * so the UI routes the tap to the right chat screen.
+ */
+data class MessageSearchResult(
+    val conversationId: String,
+    val conversationLabel: String,
+    val isGroup: Boolean,
+    val snippet: String,
+    val timestamp: String,
 )
 
 internal fun org.khord.shared.storage.GroupRecord.toEntry(): GroupEntry =

@@ -289,6 +289,36 @@ internal class InMemoryPersistence : Persistence {
     override suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord> =
         groupMessages.filter { it.first == groupId }.map { it.second }.sortedBy { it.id }
 
+    override suspend fun searchMessages(query: String): List<SearchResult> {
+        // No FTS engine in the in-memory store — fall back to a simple
+        // case-insensitive substring scan. Sufficient for tests; the
+        // DbPersistence path uses real FTS5.
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        val needle = q.lowercase()
+        val results = mutableListOf<SearchResult>()
+        for ((fp, msg) in messages) {
+            if (msg.body.contains("🔄 Session reset")) continue
+            if (msg.body.startsWith("Security verification has been reset.")) continue
+            if (msg.body.lowercase().contains(needle)) {
+                val c = contacts[fp]
+                val label = c?.localDisplayName?.takeIf { it.isNotBlank() }
+                    ?: c?.displayName?.takeIf { it.isNotEmpty() }
+                    ?: (fp.take(8) + "…" + fp.takeLast(8))
+                results += SearchResult(fp, label, isGroup = false, body = msg.body,
+                    timestamp = msg.timestamp)
+            }
+        }
+        for ((gid, msg) in groupMessages) {
+            if (msg.body.lowercase().contains(needle)) {
+                val label = groups[gid]?.groupName ?: gid
+                results += SearchResult(gid, label, isGroup = true, body = msg.body,
+                    timestamp = msg.timestamp)
+            }
+        }
+        return results.sortedByDescending { it.timestamp }
+    }
+
     override suspend fun findGroupMessageByUuid(messageUuid: String): GroupMessageLookup? {
         if (messageUuid.isEmpty()) return null
         for ((gid, msg) in groupMessages) {

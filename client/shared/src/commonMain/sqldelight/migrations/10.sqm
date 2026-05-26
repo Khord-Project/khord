@@ -1,0 +1,46 @@
+-- Migration from schema version 10 to 11.
+--
+-- Full-text search (#60). Creates the two external-content FTS5
+-- indexes + their sync triggers, then back-fills both from the
+-- existing message / group_message rows so search works over
+-- history that predates this migration.
+--
+-- (Renumbered from 8.sqm → 10.sqm on rebase: reply-to-message took
+-- 8.sqm and contact-blocking took 9.sqm; this is the third of the
+-- three v8-derived branches to land.)
+
+CREATE VIRTUAL TABLE message_fts USING fts5(
+    body,
+    content='message',
+    content_rowid='id'
+);
+INSERT INTO message_fts(rowid, body) SELECT id, body FROM message;
+
+CREATE TRIGGER message_fts_insert AFTER INSERT ON message BEGIN
+    INSERT INTO message_fts(rowid, body) VALUES (new.id, new.body);
+END;
+CREATE TRIGGER message_fts_delete AFTER DELETE ON message BEGIN
+    INSERT INTO message_fts(message_fts, rowid, body) VALUES ('delete', old.id, old.body);
+END;
+CREATE TRIGGER message_fts_update AFTER UPDATE ON message BEGIN
+    INSERT INTO message_fts(message_fts, rowid, body) VALUES ('delete', old.id, old.body);
+    INSERT INTO message_fts(rowid, body) VALUES (new.id, new.body);
+END;
+
+CREATE VIRTUAL TABLE group_message_fts USING fts5(
+    body,
+    content='group_message',
+    content_rowid='id'
+);
+INSERT INTO group_message_fts(rowid, body) SELECT id, body FROM group_message;
+
+CREATE TRIGGER group_message_fts_insert AFTER INSERT ON group_message BEGIN
+    INSERT INTO group_message_fts(rowid, body) VALUES (new.id, new.body);
+END;
+CREATE TRIGGER group_message_fts_delete AFTER DELETE ON group_message BEGIN
+    INSERT INTO group_message_fts(group_message_fts, rowid, body) VALUES ('delete', old.id, old.body);
+END;
+CREATE TRIGGER group_message_fts_update AFTER UPDATE ON group_message BEGIN
+    INSERT INTO group_message_fts(group_message_fts, rowid, body) VALUES ('delete', old.id, old.body);
+    INSERT INTO group_message_fts(rowid, body) VALUES (new.id, new.body);
+END;

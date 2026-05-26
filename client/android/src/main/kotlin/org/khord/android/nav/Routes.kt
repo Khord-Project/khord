@@ -22,6 +22,8 @@ object Routes {
     /** Contact acceptance gate — see Messaging.pendingContacts. */
     const val PENDING_CONTACTS = "contacts/pending"
     const val SETTINGS = "settings"
+    /** Local full-text message search (#60). */
+    const val SEARCH = "search"
 
     // Chat carries the contact's fingerprint so the screen can pick the
     // right ContactSession from the orchestrator.

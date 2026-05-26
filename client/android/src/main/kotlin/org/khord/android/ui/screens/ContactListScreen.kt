@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -156,6 +157,9 @@ fun ContactListScreen(nav: NavController, vm: ContactListViewModel = viewModel()
             TopAppBar(
                 title = { Text("Khord") },
                 actions = {
+                    IconButton(onClick = { nav.navigate(Routes.SEARCH) }) {
+                        Icon(Icons.Default.Search, contentDescription = "Search")
+                    }
                     IconButton(onClick = { vm.refresh() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }

@@ -522,6 +522,48 @@ internal class DbPersistence(
             )
         }
 
+    override suspend fun searchMessages(query: String): List<SearchResult> {
+        val fts = toFtsPrefixQuery(query) ?: return emptyList()
+        val oneToOne = db.messageSearchQueries.searchMessages(fts).executeAsList().map {
+            val label = it.local_display_name?.takeIf { n -> n.isNotBlank() }
+                ?: it.display_name.takeIf { n -> n.isNotEmpty() }
+                ?: (it.fingerprint.take(8) + "…" + it.fingerprint.takeLast(8))
+            SearchResult(
+                conversationId = it.fingerprint,
+                conversationLabel = label,
+                isGroup = false,
+                body = it.body,
+                timestamp = it.timestamp,
+            )
+        }
+        val group = db.messageSearchQueries.searchGroupMessages(fts).executeAsList().map {
+            SearchResult(
+                conversationId = it.group_id,
+                conversationLabel = it.group_name,
+                isGroup = true,
+                body = it.body,
+                timestamp = it.timestamp,
+            )
+        }
+        return (oneToOne + group).sortedByDescending { it.timestamp }.take(100)
+    }
+
+    /**
+     * Turn a raw user search string into an FTS5 MATCH expression:
+     * each whitespace token becomes a double-quoted prefix term
+     * (`"foo"* "bar"*`). Quoting neutralises FTS5 operator characters
+     * in user input; the trailing `*` gives search-as-you-type prefix
+     * matching. Returns null for an all-whitespace query.
+     */
+    private fun toFtsPrefixQuery(query: String): String? {
+        val tokens = query.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return null
+        return tokens.joinToString(" ") { token ->
+            val escaped = token.replace("\"", "\"\"")
+            "\"$escaped\"*"
+        }
+    }
+
     // ── Token cache ─────────────────────────────────────────────────────────
 
     override suspend fun saveKeyServerToken(token: String, expiresAt: String) {
