@@ -18,11 +18,11 @@ android {
         applicationId = "org.khord.android"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 17
+        versionCode = 18
         // versionName must match the GitHub release tag (minus the leading
         // `v`) so UpdateChecker's compare doesn't false-positive. Bump
         // this when cutting a new release tag.
-        versionName = "0.1.0-alpha.17"
+        versionName = "0.1.0-alpha.18"
         // Default server URLs are picked at compile time per flavor (see
         // productFlavors below) and exposed via BuildConfig. The user can
         // still override either with "Use custom servers" at runtime via
