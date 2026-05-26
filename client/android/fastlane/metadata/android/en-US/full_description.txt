@@ -1,0 +1,44 @@
+Khord is an end-to-end encrypted messenger built on a split-trust
+architecture: no single server operator can read messages, identify
+users, or observe who talks to whom.
+
+Two independent servers each hold half the picture. The Key Server
+stores identity keys and pre-key bundles but never sees message
+traffic. The Relay Server routes opaque encrypted blobs between
+per-contact mailboxes but never learns user identities. Neither can
+reconstruct the whole on its own, and the two can be operated by
+different organisations in different jurisdictions.
+
+Both servers are open source and self-hostable. The app ships
+pointing at the community servers (keys.khord.org, relay.khord.org)
+but you can switch to your own from the in-app settings.
+
+Encryption
+- End-to-end encryption using the Signal Protocol (X3DH key
+  agreement + Double Ratchet), implemented on libsodium primitives.
+- Forward secrecy and post-compromise recovery.
+
+Identity
+- Your identity is a cryptographic key, derived from a BIP39 seed
+  phrase. No phone number, no email, no account.
+- The same seed phrase restores your identity on a new device.
+- Contact fingerprint verification with key-change warnings.
+
+Features
+- One-to-one and group messaging (groups are entirely client-side;
+  servers have no concept of groups).
+- Contacts added by QR code or contact link — no server-side
+  contact discovery.
+- Local full-text message search.
+- Message editing, quote-replies, contact blocking and muting.
+- Panic button: instant, total wipe of all data on the device.
+- Encrypted local storage (SQLCipher + Android Keystore).
+
+Status
+Khord is a proof of concept under active development. The
+cryptographic implementation has not yet been independently
+security-audited. Do not rely on it for high-risk communication
+until an audit has been completed.
+
+Source code and protocol specification:
+https://github.com/Khord-Project/khord

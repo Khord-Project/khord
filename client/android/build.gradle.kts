@@ -104,6 +104,16 @@ android {
         buildConfig = true
     }
 
+    // F-Droid prefers APKs without the Play-style signed dependency
+    // metadata block (the AGP-injected "dependency info" blob). Turn
+    // it off for both APK and bundle so the F-Droid build matches and
+    // there's no opaque proprietary metadata embedded. See
+    // fastlane/FDROID_NOTES.md.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
