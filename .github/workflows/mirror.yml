@@ -12,6 +12,13 @@ on:
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    # A mirror hiccup is a backup-lag event, not a reason to mark the
+    # commit's checks failed. continue-on-error keeps the overall run
+    # green even if the push ultimately can't reach Codeberg — the
+    # next push force-syncs everything that accumulated, so the mirror
+    # self-heals once Codeberg is reachable again. The step still logs
+    # loudly on failure so a persistent problem is visible in the run.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,5 +33,28 @@ jobs:
           CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
         run: |
           git remote add codeberg "https://${CODEBERG_TOKEN}@codeberg.org/Khord-Project/khord.git"
-          git push codeberg --all --force
-          git push codeberg --tags --force
+
+          # Retry with backoff — Codeberg occasionally returns transient
+          # 5xx (gateway timeouts). Three attempts, 30s apart, rides out
+          # brief blips without failing the run.
+          push_with_retry() {
+            local refspec="$1"
+            local attempt=1
+            until [ "$attempt" -gt 3 ]; do
+              if git push codeberg "$refspec" --force; then
+                return 0
+              fi
+              echo "::warning::push '$refspec' attempt $attempt failed; retrying in 30s…"
+              attempt=$((attempt + 1))
+              sleep 30
+            done
+            echo "::error::push '$refspec' failed after 3 attempts"
+            return 1
+          }
+
+          # Attempt both even if one fails, so a partial Codeberg
+          # outage still mirrors whatever it can.
+          failed=0
+          push_with_retry --all  || failed=1
+          push_with_retry --tags || failed=1
+          exit "$failed"
