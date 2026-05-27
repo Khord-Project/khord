@@ -2,6 +2,7 @@ package org.khord.android.ui.screens
 
 import android.Manifest
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,11 +51,13 @@ import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import org.khord.android.AppContainer
 import org.khord.android.nav.Routes
+import org.khord.android.secret.OneTimeSecretLink
 import org.khord.android.ui.qr.QrCodeImage
 import org.khord.android.ui.qr.QrScannerView
 import org.khord.android.ui.viewmodel.AddContactViewModel
 import org.khord.android.util.ContactLink
 import org.khord.android.util.SecureClipboard
+import kotlinx.coroutines.launch
 
 private enum class Tab { Share, Add }
 
@@ -155,6 +159,60 @@ private fun SharePane(vm: AddContactViewModel, state: AddContactViewModel.UiStat
                     modifier = Modifier.weight(1f),
                 ) { Text("Share") }
             }
+
+            Spacer(Modifier.height(12.dp))
+
+            // One-time secret link (#23) — an OPTIONAL alternative to
+            // the plain contact link above. Encrypts the link
+            // client-side and uploads only the ciphertext; the key
+            // rides in the URL fragment so it self-destructs after a
+            // single view on khord.org.
+            val scope = rememberCoroutineScope()
+            var creatingLink by remember { mutableStateOf(false) }
+            OutlinedButton(
+                onClick = {
+                    val http = AppContainer.http
+                    if (http == null) {
+                        Toast.makeText(
+                            context,
+                            "Couldn't create link. Try again or share your regular link.",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        return@OutlinedButton
+                    }
+                    creatingLink = true
+                    scope.launch {
+                        val result = OneTimeSecretLink.create(http, link)
+                        creatingLink = false
+                        result.onSuccess { url ->
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, url)
+                                putExtra(Intent.EXTRA_TITLE, "Khord one-time link")
+                            }
+                            context.startActivity(
+                                Intent.createChooser(send, "Share one-time link"),
+                            )
+                        }.onFailure {
+                            Toast.makeText(
+                                context,
+                                "Couldn't create link. Try again or share your regular link.",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                },
+                enabled = !creatingLink,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (creatingLink) "Creating secure link…" else "Create one-time link")
+            }
+            Text(
+                "Creates a link that can only be opened once, then self-destructs.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
             Spacer(Modifier.height(12.dp))
             Text(
                 "Your contact link contains only public information. It's safe " +
