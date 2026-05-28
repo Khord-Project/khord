@@ -40,6 +40,12 @@ class AcknowledgeRequest(BaseModel):
     through_sequence: int
 
 
+class UploadMediaResponse(BaseModel):
+    media_id: str = Field(
+        description="Random 32-char hex id; fetch the blob at GET /v1/media/{media_id}"
+    )
+
+
 class PowParamsResponse(BaseModel):
     difficulty_bits: int
     algorithm: str = "sha256-leading-zero-bits"

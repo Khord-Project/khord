@@ -55,3 +55,31 @@ class Message(Base):
     )
 
     mailbox: Mapped[Mailbox] = relationship(back_populates="messages")
+
+
+class Media(Base):
+    """An opaque, client-encrypted media blob (ADR 029).
+
+    Deliberately standalone — no FK to a mailbox. The uploader and the
+    eventual downloader are decoupled: the sender uploads here, then ships
+    the random `id` (+ the symmetric key, out-of-band via the E2E message
+    channel) to the recipient, who fetches by `id` alone. That makes the
+    blob portable across relays (federation) and means knowing the 128-bit
+    random `id` is the only capability required to fetch — which is why the
+    GET is delete-on-read (one-time, like a consumed message).
+
+    The server stores ONLY: the random id, the encrypted bytes, and two
+    timestamps. No filename, no content type, no sender, no recipient, no
+    key — it cannot decrypt or attribute the blob.
+    """
+
+    __tablename__ = "media"
+    __table_args__ = (Index("ix_media_expires_at", "expires_at"),)
+
+    # 16 random bytes as hex (secrets.token_hex(16)) — 128 bits of capability.
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

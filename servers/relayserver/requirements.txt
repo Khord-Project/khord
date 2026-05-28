@@ -1,4 +1,7 @@
 fastapi==0.136.1
+# Required by FastAPI for multipart/form-data parsing — the POST /v1/media
+# endpoint takes a binary UploadFile + Form field (ADR 029).
+python-multipart==0.0.20
 uvicorn[standard]==0.46.0
 sqlalchemy[asyncio]==2.0.49
 asyncpg==0.31.0
