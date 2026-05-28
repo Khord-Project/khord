@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import mailboxes, meta, ws
+from app.routers import mailboxes, media, meta, ws
 
 app = FastAPI(title="Khord Relay Server", version="0.1.0")
 
@@ -18,6 +18,7 @@ app.add_middleware(
 )
 
 app.include_router(mailboxes.router, prefix=settings.api_v1_prefix)
+app.include_router(media.router, prefix=settings.api_v1_prefix)
 app.include_router(meta.router, prefix=settings.api_v1_prefix)
 app.include_router(ws.router, prefix=settings.api_v1_prefix)
 

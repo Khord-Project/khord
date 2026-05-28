@@ -30,7 +30,7 @@ from app.database import get_session  # noqa: E402  (after env setup)
 from app.main import app  # noqa: E402
 
 
-_TABLES = ["messages", "mailboxes"]
+_TABLES = ["media", "messages", "mailboxes"]
 
 
 async def _request_scoped_session():
