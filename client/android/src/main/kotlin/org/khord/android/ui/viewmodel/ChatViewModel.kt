@@ -113,6 +113,16 @@ class ChatViewModel(
     fun startPolling() {
         if (pollJob?.isActive == true) return
         pollJob = viewModelScope.launch(Dispatchers.IO) {
+            // Always drain once on open, EVEN IF the push socket is
+            // connected. The push path only fires on a live "new message"
+            // signal; a message that arrived while this device's socket
+            // was down (app backgrounded, just-launched, flaky network) is
+            // never re-signalled on reconnect, and the steady-state poll
+            // below is suppressed whenever push is alive — so without this
+            // the backlog would sit unfetched until the *next* new message.
+            // Opening the conversation is exactly when the user expects to
+            // see everything waiting for them.
+            fetchOnce()
             while (isActive) {
                 // No point polling a contact we've already marked
                 // unavailable — wait for the user to back out and
