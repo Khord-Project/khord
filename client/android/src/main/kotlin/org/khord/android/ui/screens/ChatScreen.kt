@@ -15,9 +15,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -144,6 +148,33 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
         // preview label/snippet for the compose-banner), or null.
         var replyTo by remember { mutableStateOf<ReplyTarget?>(null) }
         val scope = rememberCoroutineScope()
+        // Image-attachment UI state (ADR 029): the picked-but-not-yet-sent
+        // image awaiting a caption, and the cached path currently open
+        // full-screen (null = no overlay).
+        var pendingImage by remember { mutableStateOf<android.net.Uri?>(null) }
+        var fullScreen by remember { mutableStateOf<FullScreenImage?>(null) }
+        val photoPicker = rememberLauncherForActivityResult(
+            ActivityResultContracts.PickVisualMedia(),
+        ) { uri -> if (uri != null) pendingImage = uri }
+
+        pendingImage?.let { uri ->
+            ImagePreviewSheet(
+                uri = uri,
+                sending = state.sending,
+                onCancel = { pendingImage = null },
+                onSend = { caption ->
+                    vm.sendImage(context, uri, caption)
+                    pendingImage = null
+                },
+            )
+        }
+        fullScreen?.let { fs ->
+            FullScreenImageViewer(
+                path = fs.path,
+                caption = fs.caption,
+                onDismiss = { fullScreen = null },
+            )
+        }
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -176,6 +207,7 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                         msg = msg,
                         senderName = state.contactDisplayName,
                         quoted = quoted,
+                        downloadingMedia = state.downloadingMediaIds,
                         onEdit = { uuid, body ->
                             editingUuid = uuid
                             draft = body
@@ -196,6 +228,8 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                                 scope.launch { listState.animateScrollToItem(origIdx) }
                             }
                         },
+                        onDownloadImage = { vm.downloadImage(context, msg.id, it) },
+                        onOpenImage = { path -> fullScreen = FullScreenImage(path, msg.body) },
                     )
                 }
             }
@@ -287,6 +321,26 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Attachment button — opens the system photo picker. Hidden
+                // while editing a message (you can't swap an edit for an
+                // image). ADR 029.
+                if (editingUuid == null) {
+                    IconButton(
+                        enabled = !state.sending && !unavailable,
+                        onClick = {
+                            photoPicker.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                ),
+                            )
+                        },
+                    ) {
+                        Icon(
+                            Icons.Filled.AddPhotoAlternate,
+                            contentDescription = "Attach image",
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
@@ -373,14 +427,20 @@ private fun DateSeparator(iso: String) {
 /** A message the user is composing a reply to (for the compose banner). */
 private data class ReplyTarget(val uuid: String, val label: String, val snippet: String)
 
+/** A cached image currently open in the full-screen viewer (path + caption). */
+private data class FullScreenImage(val path: String, val caption: String)
+
 @Composable
 private fun MessageRow(
     msg: MessageEntry,
     senderName: String?,
     quoted: QuotedPreview?,
+    downloadingMedia: Set<String>,
     onEdit: (uuid: String, body: String) -> Unit,
     onReply: (uuid: String, body: String) -> Unit,
     onQuotedTap: () -> Unit,
+    onDownloadImage: (mediaId: String) -> Unit,
+    onOpenImage: (path: String) -> Unit,
 ) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val arrange = if (isSent) Arrangement.End else Arrangement.Start
@@ -397,15 +457,27 @@ private fun MessageRow(
             )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrange) {
-            MessageBubble(
-                body = msg.body,
-                isSent = msg.direction == MessageEntry.Direction.SENT,
-                messageUuid = msg.messageUuid,
-                onEdit = onEdit,
-                onReply = onReply,
-                quoted = quoted,
-                onQuotedTap = onQuotedTap,
-            )
+            val media = msg.media
+            if (media != null) {
+                ImageBubble(
+                    media = media,
+                    caption = msg.body,
+                    isSent = isSent,
+                    downloading = media.mediaId in downloadingMedia,
+                    onDownload = { onDownloadImage(media.mediaId) },
+                    onOpenFull = onOpenImage,
+                )
+            } else {
+                MessageBubble(
+                    body = msg.body,
+                    isSent = msg.direction == MessageEntry.Direction.SENT,
+                    messageUuid = msg.messageUuid,
+                    onEdit = onEdit,
+                    onReply = onReply,
+                    quoted = quoted,
+                    onQuotedTap = onQuotedTap,
+                )
+            }
         }
         // Timestamp + optional (edited) tag on the same line. The
         // tag goes after the time, in the same muted style.

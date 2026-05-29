@@ -107,6 +107,24 @@ internal data class InnerPayload(
      * fabricate a quote.
      */
     val replyToUuid: String? = null,
+
+    // ── Image-attachment fields (ADR 029) ────────────────────────────
+    // Present on "text" / "group_message" payloads that carry an image.
+    // All null on a plain text message. [body] doubles as the optional
+    // caption (may be empty). The full image is NOT on the wire here — it
+    // is uploaded (encrypted) to the relay's media endpoint and fetched
+    // separately by id; only the key + a tiny inline thumbnail ride inside
+    // this E2E-encrypted payload, so the relay can never decrypt either.
+    /** Relay-assigned blob id (32 hex chars) at GET {media_relay}/v1/media/{id}. */
+    val mediaId: String? = null,
+    /** Base64 of the one-time 32-byte XChaCha20-Poly1305 key. Never sent to the relay. */
+    val mediaKey: String? = null,
+    /** Base64 of the 24-byte nonce for the full image (thumbnail nonce is derived). */
+    val mediaNonce: String? = null,
+    /** Base URL of the relay holding the blob — needed for cross-relay fetch. */
+    val mediaRelay: String? = null,
+    /** Base64 of the encrypted thumbnail (ct||tag), decrypted inline for instant preview. */
+    val thumbnail: String? = null,
 )
 
 /**

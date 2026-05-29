@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider paths for sharing decrypted image attachments (ADR 029).
+    Exposes ONLY the app-private media cache subdirectory
+    (filesDir/media — see MediaCache), so a shared image URI can be read
+    by the chosen target app while the rest of internal storage stays
+    inaccessible.
+-->
+<paths>
+    <files-path name="media" path="media/" />
+</paths>

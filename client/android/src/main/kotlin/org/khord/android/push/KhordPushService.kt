@@ -186,9 +186,22 @@ class KhordPushService : Service() {
             )
             l.start(subs)
             // Mirror the listener's connected-fingerprints set into
-            // AppContainer so ViewModels can observe.
+            // AppContainer so ViewModels can observe — AND drain each
+            // freshly-(re)connected mailbox once. The server only emits a
+            // push signal when a message ARRIVES, not on reconnect, so a
+            // message delivered while this device's socket was down (app
+            // backgrounded, network blip, cold start) is never re-signalled.
+            // Without this catch-up the backlog sits unfetched until the
+            // next inbound message. handlePush is a no-op on an empty
+            // mailbox, so draining on every connect is safe.
+            var previouslyConnected = emptySet<String>()
             stateMirrorJob = l.connectedFingerprints
-                .onEach { AppContainer.pushConnected.value = it }
+                .onEach { connected ->
+                    AppContainer.pushConnected.value = connected
+                    val newlyConnected = connected - previouslyConnected
+                    previouslyConnected = connected
+                    for (fp in newlyConnected) handlePush(fp)
+                }
                 .launchIn(scope)
             listener = l
         } else {

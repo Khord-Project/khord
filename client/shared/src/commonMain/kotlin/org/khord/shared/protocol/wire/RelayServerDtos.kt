@@ -52,3 +52,9 @@ internal data class FetchMessagesResponse(
 internal data class AcknowledgeRequest(
     val throughSequence: Long,
 )
+
+/** Response from POST /v1/media (ADR 029). */
+@Serializable
+internal data class UploadMediaResponse(
+    val mediaId: String,
+)

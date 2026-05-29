@@ -1,0 +1,33 @@
+-- Migration from schema version 11 to 12.
+--
+-- Image attachments (ADR 029). Adds the media-metadata columns to both
+-- the per-contact `message` table and the `group_message` table. All
+-- columns are nullable so existing text-only rows migrate untouched.
+--
+-- The full image is never stored in this (encrypted) DB — only the
+-- one-time XChaCha20-Poly1305 key + nonce (media_key / media_nonce), the
+-- relay the encrypted blob was uploaded to (media_relay) + its id
+-- (media_id), a tiny encrypted thumbnail for instant inline preview
+-- (thumbnail), and a filesystem path to the decrypted full image once it
+-- has been fetched and cached (media_cached_path).
+--
+-- The body column doubles as the optional caption for image messages.
+--
+-- These columns are invisible to the FTS5 indexes (message_fts /
+-- group_message_fts are external-content tables over `body` only) and to
+-- the FTS sync triggers (which reference new.body / old.id explicitly),
+-- so no FTS changes are needed.
+
+ALTER TABLE message ADD COLUMN media_id TEXT;
+ALTER TABLE message ADD COLUMN media_key BLOB;
+ALTER TABLE message ADD COLUMN media_nonce BLOB;
+ALTER TABLE message ADD COLUMN media_relay TEXT;
+ALTER TABLE message ADD COLUMN thumbnail BLOB;
+ALTER TABLE message ADD COLUMN media_cached_path TEXT;
+
+ALTER TABLE group_message ADD COLUMN media_id TEXT;
+ALTER TABLE group_message ADD COLUMN media_key BLOB;
+ALTER TABLE group_message ADD COLUMN media_nonce BLOB;
+ALTER TABLE group_message ADD COLUMN media_relay TEXT;
+ALTER TABLE group_message ADD COLUMN thumbnail BLOB;
+ALTER TABLE group_message ADD COLUMN media_cached_path TEXT;

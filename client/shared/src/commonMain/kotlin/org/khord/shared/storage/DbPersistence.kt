@@ -345,6 +345,7 @@ internal class DbPersistence(
         timestamp: String,
         messageUuid: String?,
         replyToUuid: String?,
+        media: MediaAttachment?,
     ) {
         db.messageQueries.insertMessage(
             contact_fingerprint = contactFingerprint,
@@ -354,6 +355,12 @@ internal class DbPersistence(
             stored_at = now(),
             message_uuid = messageUuid,
             reply_to_uuid = replyToUuid,
+            media_id = media?.mediaId,
+            media_key = media?.mediaKey,
+            media_nonce = media?.mediaNonce,
+            media_relay = media?.mediaRelay,
+            thumbnail = media?.thumbnail,
+            media_cached_path = media?.cachedPath,
         )
     }
 
@@ -368,8 +375,16 @@ internal class DbPersistence(
                 messageUuid = it.message_uuid,
                 edited = it.edited != 0L,
                 replyToUuid = it.reply_to_uuid,
+                media = mediaFrom(
+                    it.media_id, it.media_key, it.media_nonce,
+                    it.media_relay, it.thumbnail, it.media_cached_path,
+                ),
             )
         }
+
+    override suspend fun setMessageMediaCachedPath(messageId: Long, cachedPath: String) {
+        db.messageQueries.updateMessageMediaCachedPath(cachedPath, messageId)
+    }
 
     override suspend fun findMessageByUuid(messageUuid: String): MessageLookup? {
         if (messageUuid.isEmpty()) return null
@@ -475,6 +490,7 @@ internal class DbPersistence(
         direction: MessageDirection,
         messageUuid: String?,
         replyToUuid: String?,
+        media: MediaAttachment?,
     ) {
         db.groupMessageQueries.insertGroupMessage(
             group_id = groupId,
@@ -486,8 +502,40 @@ internal class DbPersistence(
             stored_at = now(),
             message_uuid = messageUuid,
             reply_to_uuid = replyToUuid,
+            media_id = media?.mediaId,
+            media_key = media?.mediaKey,
+            media_nonce = media?.mediaNonce,
+            media_relay = media?.mediaRelay,
+            thumbnail = media?.thumbnail,
+            media_cached_path = media?.cachedPath,
         )
     }
+
+    override suspend fun setGroupMessageMediaCachedPath(messageId: Long, cachedPath: String) {
+        db.groupMessageQueries.updateGroupMessageMediaCachedPath(cachedPath, messageId)
+    }
+
+    /**
+     * Reassemble a [MediaAttachment] from a row's media columns. Returns
+     * null unless the required fields are all present (a plain text row has
+     * them all null; cachedPath alone may be null on an attachment that
+     * hasn't been downloaded yet).
+     */
+    private fun mediaFrom(
+        mediaId: String?,
+        mediaKey: ByteArray?,
+        mediaNonce: ByteArray?,
+        mediaRelay: String?,
+        thumbnail: ByteArray?,
+        cachedPath: String?,
+    ): MediaAttachment? =
+        if (mediaId != null && mediaKey != null && mediaNonce != null &&
+            mediaRelay != null && thumbnail != null
+        ) {
+            MediaAttachment(mediaId, mediaKey, mediaNonce, mediaRelay, thumbnail, cachedPath)
+        } else {
+            null
+        }
 
     override suspend fun findGroupMessageByUuid(messageUuid: String): GroupMessageLookup? {
         if (messageUuid.isEmpty()) return null
@@ -519,6 +567,10 @@ internal class DbPersistence(
                 messageUuid = it.message_uuid,
                 edited = it.edited != 0L,
                 replyToUuid = it.reply_to_uuid,
+                media = mediaFrom(
+                    it.media_id, it.media_key, it.media_nonce,
+                    it.media_relay, it.thumbnail, it.media_cached_path,
+                ),
             )
         }
 

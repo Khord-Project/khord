@@ -20,7 +20,17 @@ CREATE TABLE group_message (
     edited                INTEGER NOT NULL DEFAULT 0,
     -- message_uuid of the group message this one replies to (#61).
     -- Nullable; null = not a reply. See Message.sq.
-    reply_to_uuid         TEXT
+    reply_to_uuid         TEXT,
+    -- ── Image attachments (ADR 029). See Message.sq for column
+    -- semantics. The blob is uploaded ONCE; each member receives the
+    -- same media_id + key via their own pairwise channel and fetches
+    -- independently, so every member's row carries identical media_*.
+    media_id              TEXT,
+    media_key             BLOB,
+    media_nonce           BLOB,
+    media_relay           TEXT,
+    thumbnail             BLOB,
+    media_cached_path     TEXT
 );
 
 CREATE INDEX group_message_by_group ON group_message(group_id, id);
@@ -29,14 +39,20 @@ CREATE INDEX group_message_by_uuid ON group_message(message_uuid);
 insertGroupMessage:
 INSERT INTO group_message(
     group_id, sender_fingerprint, sender_display_name,
-    body, timestamp, direction, stored_at, message_uuid, reply_to_uuid
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    body, timestamp, direction, stored_at, message_uuid, reply_to_uuid,
+    media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectGroupMessages:
-SELECT id, sender_fingerprint, sender_display_name, body, timestamp, direction, stored_at, message_uuid, edited, reply_to_uuid
+SELECT id, sender_fingerprint, sender_display_name, body, timestamp, direction, stored_at, message_uuid, edited, reply_to_uuid,
+       media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path
   FROM group_message
  WHERE group_id = ?
  ORDER BY id ASC;
+
+-- See Message.sq.updateMessageMediaCachedPath.
+updateGroupMessageMediaCachedPath:
+UPDATE group_message SET media_cached_path = ? WHERE id = ?;
 
 selectGroupMessageByUuid:
 SELECT id, group_id, sender_fingerprint, body, timestamp, message_uuid, edited
