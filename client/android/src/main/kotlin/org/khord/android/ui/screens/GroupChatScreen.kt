@@ -11,8 +11,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -114,6 +118,32 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
         var editingUuid by remember { mutableStateOf<String?>(null) }
         var replyTo by remember { mutableStateOf<GroupReplyTarget?>(null) }
         val scope = rememberCoroutineScope()
+        val context = androidx.compose.ui.platform.LocalContext.current
+        // Image-attachment UI state (ADR 029) — see ChatScreen.
+        var pendingImage by remember { mutableStateOf<android.net.Uri?>(null) }
+        var fullScreen by remember { mutableStateOf<GroupFullScreenImage?>(null) }
+        val photoPicker = rememberLauncherForActivityResult(
+            ActivityResultContracts.PickVisualMedia(),
+        ) { uri -> if (uri != null) pendingImage = uri }
+
+        pendingImage?.let { uri ->
+            ImagePreviewSheet(
+                uri = uri,
+                sending = state.sending,
+                onCancel = { pendingImage = null },
+                onSend = { caption ->
+                    vm.sendImage(context, uri, caption)
+                    pendingImage = null
+                },
+            )
+        }
+        fullScreen?.let { fs ->
+            FullScreenImageViewer(
+                path = fs.path,
+                caption = fs.caption,
+                onDismiss = { fullScreen = null },
+            )
+        }
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -145,6 +175,7 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                     GroupMessageRow(
                         msg = msg,
                         quoted = quoted,
+                        downloadingMedia = state.downloadingMediaIds,
                         onEdit = { uuid, body ->
                             editingUuid = uuid
                             draft = body
@@ -165,6 +196,8 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                                 scope.launch { listState.animateScrollToItem(origIdx) }
                             }
                         },
+                        onDownloadImage = { vm.downloadImage(context, msg.id, it) },
+                        onOpenImage = { path -> fullScreen = GroupFullScreenImage(path, msg.body) },
                     )
                 }
             }
@@ -245,6 +278,23 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (editingUuid == null) {
+                    IconButton(
+                        enabled = !state.sending,
+                        onClick = {
+                            photoPicker.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                ),
+                            )
+                        },
+                    ) {
+                        Icon(
+                            Icons.Filled.AddPhotoAlternate,
+                            contentDescription = "Attach image",
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
@@ -297,13 +347,19 @@ private fun GroupDateSeparator(iso: String) {
 /** A group message the user is composing a reply to (compose banner). */
 private data class GroupReplyTarget(val uuid: String, val label: String, val snippet: String)
 
+/** A cached group image currently open in the full-screen viewer. */
+private data class GroupFullScreenImage(val path: String, val caption: String)
+
 @Composable
 private fun GroupMessageRow(
     msg: GroupMessageEntry,
     quoted: QuotedPreview?,
+    downloadingMedia: Set<String>,
     onEdit: (uuid: String, body: String) -> Unit,
     onReply: (uuid: String, body: String) -> Unit,
     onQuotedTap: () -> Unit,
+    onDownloadImage: (mediaId: String) -> Unit,
+    onOpenImage: (path: String) -> Unit,
 ) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val align = if (isSent) Alignment.End else Alignment.Start
@@ -324,15 +380,27 @@ private fun GroupMessageRow(
             )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrange) {
-            MessageBubble(
-                body = msg.body,
-                isSent = isSent,
-                messageUuid = msg.messageUuid,
-                onEdit = onEdit,
-                onReply = onReply,
-                quoted = quoted,
-                onQuotedTap = onQuotedTap,
-            )
+            val media = msg.media
+            if (media != null) {
+                ImageBubble(
+                    media = media,
+                    caption = msg.body,
+                    isSent = isSent,
+                    downloading = media.mediaId in downloadingMedia,
+                    onDownload = { onDownloadImage(media.mediaId) },
+                    onOpenFull = onOpenImage,
+                )
+            } else {
+                MessageBubble(
+                    body = msg.body,
+                    isSent = isSent,
+                    messageUuid = msg.messageUuid,
+                    onEdit = onEdit,
+                    onReply = onReply,
+                    quoted = quoted,
+                    onQuotedTap = onQuotedTap,
+                )
+            }
         }
         val timestampLabel = TimestampFormat.formatMessageTime(msg.timestamp)
         val full = if (msg.edited) "$timestampLabel · (edited)" else timestampLabel

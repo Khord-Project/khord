@@ -41,6 +41,22 @@
             </intent-filter>
         </activity>
 
+        <!--
+             FileProvider for sharing decrypted image attachments out to
+             other apps via the system share sheet (ADR 029). Grants
+             one-shot read URIs into the app-private media cache; no other
+             app can browse the cache, only receive a specific shared file.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".push.KhordPushService"
             android:exported="false"

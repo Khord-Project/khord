@@ -1037,6 +1037,243 @@ class Messaging internal constructor(
         return sequence
     }
 
+    // ── Image attachments (ADR 029) ──────────────────────────────────────────
+
+    /**
+     * Send an image to [contact]. The full image is encrypted with a fresh
+     * one-time key, uploaded to MY relay's media endpoint, and the key +
+     * inline encrypted thumbnail + [caption] travel inside the normal E2E
+     * message payload. Returns the relay-assigned media id so the caller
+     * can cache the (plaintext) full image locally under that id — the
+     * relay's one-time read won't let the sender re-fetch its own blob.
+     *
+     * [fullImageBytes] must already be EXIF-stripped + downscaled by the
+     * platform layer (ADR 029 requires the server never sees EXIF, and the
+     * shared module has no image codec). [thumbnailBytes] is the tiny
+     * preview JPEG.
+     */
+    suspend fun sendImageMessage(
+        contact: ContactSession,
+        fullImageBytes: ByteArray,
+        thumbnailBytes: ByteArray,
+        caption: String,
+        replyToUuid: String? = null,
+    ): String {
+        checkAlive()
+        check(!isContactBlocked(contact.contactFingerprint)) {
+            "cannot send to a blocked contact"
+        }
+        val up = encryptAndUploadImage(fullImageBytes, thumbnailBytes)
+        val timestamp = Clock.System.now().toString()
+        val messageUuid = newMessageUuid()
+        val payload = InnerPayload(
+            type = "text",
+            timestamp = timestamp,
+            body = caption,
+            messageUuid = messageUuid,
+            replyToUuid = replyToUuid,
+            replyInfo = ReplyInfo(
+                mailbox = contact.inboundMailboxId,
+                relayServer = relayServerUrl,
+                keyServer = keyServerUrl,
+                fingerprint = identity.fingerprint,
+                displayName = displayName,
+            ),
+            mediaId = up.mediaId,
+            mediaKey = Base64Std.encode(up.key),
+            mediaNonce = Base64Std.encode(up.nonce),
+            mediaRelay = relayServerUrl,
+            thumbnail = Base64Std.encode(up.encryptedThumbnail),
+        )
+        val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
+            .encodeToByteArray()
+        val encrypted = contact.session.encrypt(plaintextBytes)
+        val envelope = WireEnvelope.Ratchet(
+            header = Base64Std.encode(encrypted.headerBytes),
+            ciphertext = Base64Std.encode(encrypted.ciphertext),
+        )
+        val envelopeBytes = KhordJson
+            .encodeToString(WireEnvelope.serializer(), envelope as WireEnvelope)
+            .encodeToByteArray()
+        val rs = if (contact.outboundRelayServer == relayServerUrl) {
+            rsClient
+        } else {
+            RelayServerClient(http, contact.outboundRelayServer)
+        }
+        rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
+
+        persistence.saveMessage(
+            contactFingerprint = contact.contactFingerprint,
+            direction = org.khord.shared.storage.MessageDirection.SENT,
+            body = caption,
+            timestamp = timestamp,
+            messageUuid = messageUuid,
+            replyToUuid = replyToUuid,
+            media = org.khord.shared.storage.MediaAttachment(
+                mediaId = up.mediaId,
+                mediaKey = up.key,
+                mediaNonce = up.nonce,
+                mediaRelay = relayServerUrl,
+                thumbnail = up.encryptedThumbnail,
+            ),
+        )
+        persistSession(contact)
+        return up.mediaId
+    }
+
+    /**
+     * Group image send (ADR 029). The blob is uploaded ONCE; the same
+     * media id + key are fanned out to every member via their pairwise
+     * channels, so the relay sees one upload and N independent downloads
+     * it can't correlate. Returns the media id for local caching.
+     */
+    suspend fun sendGroupImageMessage(
+        groupId: String,
+        fullImageBytes: ByteArray,
+        thumbnailBytes: ByteArray,
+        caption: String,
+        replyToUuid: String? = null,
+    ): String {
+        checkAlive()
+        val group = persistence.loadGroup(groupId)
+            ?: throw IllegalStateException("unknown groupId: $groupId")
+        val members = persistence.loadGroupMembers(groupId)
+            .filter { it.fingerprint != identity.fingerprint }
+        val up = encryptAndUploadImage(fullImageBytes, thumbnailBytes)
+        val timestamp = Clock.System.now().toString()
+        val messageUuid = newMessageUuid()
+        val keyB64 = Base64Std.encode(up.key)
+        val nonceB64 = Base64Std.encode(up.nonce)
+        val thumbB64 = Base64Std.encode(up.encryptedThumbnail)
+        for (m in members) {
+            val contact = sessionForFingerprint(m.fingerprint) ?: continue
+            sendGroupInnerPayload(
+                contact = contact,
+                payload = InnerPayload(
+                    type = "group_message",
+                    timestamp = timestamp,
+                    body = caption,
+                    messageUuid = messageUuid,
+                    replyToUuid = replyToUuid,
+                    replyInfo = myReplyInfo(contact.inboundMailboxId),
+                    groupId = groupId,
+                    mediaId = up.mediaId,
+                    mediaKey = keyB64,
+                    mediaNonce = nonceB64,
+                    mediaRelay = relayServerUrl,
+                    thumbnail = thumbB64,
+                ),
+            )
+        }
+        persistence.saveGroupMessage(
+            groupId = groupId,
+            senderFingerprint = identity.fingerprint,
+            senderDisplayName = displayName,
+            body = caption,
+            timestamp = timestamp,
+            direction = org.khord.shared.storage.MessageDirection.SENT,
+            messageUuid = messageUuid,
+            replyToUuid = replyToUuid,
+            media = org.khord.shared.storage.MediaAttachment(
+                mediaId = up.mediaId,
+                mediaKey = up.key,
+                mediaNonce = up.nonce,
+                mediaRelay = relayServerUrl,
+                thumbnail = up.encryptedThumbnail,
+            ),
+        )
+        check(group.groupId == groupId)
+        return up.mediaId
+    }
+
+    /**
+     * Download + decrypt a full image. The relay deletes the blob on this
+     * first fetch (one-time read), so callers MUST cache the returned bytes
+     * locally — a second [fetchImage] for the same id will 404.
+     */
+    suspend fun fetchImage(media: MediaEntry): ByteArray {
+        checkAlive()
+        org.khord.shared.crypto.Crypto.ensureInitialized()
+        val rs = if (media.mediaRelay == relayServerUrl) {
+            rsClient
+        } else {
+            RelayServerClient(http, media.mediaRelay)
+        }
+        val encrypted = rs.downloadMedia(media.mediaId)
+        return org.khord.shared.crypto.MediaCrypto.decrypt(
+            media.mediaKey, media.mediaNonce, encrypted,
+        )
+    }
+
+    /** Decrypt the inline thumbnail for instant preview — no network. */
+    suspend fun decryptThumbnail(media: MediaEntry): ByteArray {
+        org.khord.shared.crypto.Crypto.ensureInitialized()
+        val thumbNonce = org.khord.shared.crypto.MediaCrypto.thumbnailNonce(media.mediaNonce)
+        return org.khord.shared.crypto.MediaCrypto.decrypt(
+            media.mediaKey, thumbNonce, media.thumbnail,
+        )
+    }
+
+    /** Record the local cache path of a 1:1 image after it's been fetched. */
+    suspend fun setMessageImageCached(messageId: Long, cachedPath: String) {
+        checkAlive()
+        persistence.setMessageMediaCachedPath(messageId, cachedPath)
+    }
+
+    /** Group equivalent of [setMessageImageCached]. */
+    suspend fun setGroupMessageImageCached(messageId: Long, cachedPath: String) {
+        checkAlive()
+        persistence.setGroupMessageMediaCachedPath(messageId, cachedPath)
+    }
+
+    /**
+     * Encrypt the full image + thumbnail under one fresh key, mine PoW
+     * bound to the encrypted blob, and upload it to MY relay. Returns the
+     * media id + the key/nonce/encrypted-thumbnail to embed in the payload
+     * and persist locally.
+     */
+    private suspend fun encryptAndUploadImage(
+        fullImageBytes: ByteArray,
+        thumbnailBytes: ByteArray,
+    ): ImageUpload {
+        org.khord.shared.crypto.Crypto.ensureInitialized()
+        val key = org.khord.shared.crypto.MediaCrypto.newKey()
+        val imageNonce = org.khord.shared.crypto.MediaCrypto.newNonce()
+        val encryptedFull = org.khord.shared.crypto.MediaCrypto.encrypt(
+            key, imageNonce, fullImageBytes,
+        )
+        val encryptedThumbnail = org.khord.shared.crypto.MediaCrypto.encrypt(
+            key, org.khord.shared.crypto.MediaCrypto.thumbnailNonce(imageNonce), thumbnailBytes,
+        )
+        val params = rsClient.powParams()
+        val nonce = PowMiner.mine(PowMiner.sha256Hex(encryptedFull), params.difficultyBits)
+        val mediaId = rsClient.uploadMedia(encryptedFull, nonce)
+        return ImageUpload(mediaId, key, imageNonce, encryptedThumbnail)
+    }
+
+    private class ImageUpload(
+        val mediaId: String,
+        val key: ByteArray,
+        val nonce: ByteArray,
+        val encryptedThumbnail: ByteArray,
+    )
+
+    /** Rebuild a [MediaAttachment] from an inbound payload's media_* fields. */
+    private fun mediaFromPayload(payload: InnerPayload): org.khord.shared.storage.MediaAttachment? {
+        val id = payload.mediaId ?: return null
+        val keyB64 = payload.mediaKey ?: return null
+        val nonceB64 = payload.mediaNonce ?: return null
+        val relay = payload.mediaRelay ?: return null
+        val thumbB64 = payload.thumbnail ?: return null
+        return org.khord.shared.storage.MediaAttachment(
+            mediaId = id,
+            mediaKey = Base64Std.decode(keyB64),
+            mediaNonce = Base64Std.decode(nonceB64),
+            mediaRelay = relay,
+            thumbnail = Base64Std.decode(thumbB64),
+        )
+    }
+
     /**
      * Poll my inbound mailbox for messages from this contact. Returns the
      * decrypted plaintexts of TEXT messages in sequence order — group
@@ -1157,6 +1394,7 @@ class Messaging internal constructor(
                             timestamp = payload.timestamp,
                             messageUuid = payload.messageUuid,
                             replyToUuid = payload.replyToUuid,
+                            media = mediaFromPayload(payload),
                         )
                     }
                 }
@@ -1567,7 +1805,9 @@ class Messaging internal constructor(
         payload: InnerPayload,
     ) {
         val groupId = payload.groupId ?: return
-        val body = payload.body ?: return
+        // An image-only group message carries an empty caption; tolerate a
+        // null body when media is attached rather than dropping it.
+        val body = payload.body ?: if (payload.mediaId != null) "" else return
         // Blocked group member: hide their messages locally. We still
         // acked the envelope off the relay; we just don't store this
         // into the group log. Other members are unaffected.
@@ -1588,6 +1828,7 @@ class Messaging internal constructor(
             direction = org.khord.shared.storage.MessageDirection.RECEIVED,
             messageUuid = payload.messageUuid,
             replyToUuid = payload.replyToUuid,
+            media = mediaFromPayload(payload),
         )
         // Also keep the per-member display_name in sync — fresh info.
         if (senderName.isNotEmpty()) {
@@ -1969,6 +2210,7 @@ class Messaging internal constructor(
                 messageUuid = it.messageUuid,
                 edited = it.edited,
                 replyToUuid = it.replyToUuid,
+                media = it.media?.toEntry(),
             )
         }
     }
@@ -2168,9 +2410,32 @@ data class MessageEntry(
      * finding that UUID in the loaded history. Null = not a reply.
      */
     val replyToUuid: String? = null,
+    /**
+     * Image attachment (ADR 029), or null for a plain text message.
+     * When present the UI renders an image bubble; [body] is the
+     * optional caption.
+     */
+    val media: MediaEntry? = null,
 ) {
     enum class Direction { SENT, RECEIVED }
 }
+
+/**
+ * UI-facing view of an image attachment (ADR 029). Carries the one-time
+ * key + nonce (raw bytes) so the UI can decrypt the inline [thumbnail]
+ * immediately and, on tap, fetch + decrypt the full image via
+ * [Messaging.fetchImage]. [cachedPath] is the local filesystem path of the
+ * decrypted full image once downloaded (null until then). The full image
+ * never lives in the DB — only here, by reference.
+ */
+data class MediaEntry(
+    val mediaId: String,
+    val mediaKey: ByteArray,
+    val mediaNonce: ByteArray,
+    val mediaRelay: String,
+    val thumbnail: ByteArray,
+    val cachedPath: String? = null,
+)
 
 // ── Group public DTOs (ADR 023) ──────────────────────────────────────────────
 // Same pattern as MessageEntry: the storage layer's records are internal;
@@ -2200,6 +2465,8 @@ data class GroupMessageEntry(
     val messageUuid: String? = null,
     val edited: Boolean = false,
     val replyToUuid: String? = null,
+    /** Image attachment (ADR 029), or null for a plain text message. */
+    val media: MediaEntry? = null,
 )
 
 /**
@@ -2239,6 +2506,17 @@ internal fun org.khord.shared.storage.GroupMessageRecord.toEntry(): GroupMessage
         messageUuid = messageUuid,
         edited = edited,
         replyToUuid = replyToUuid,
+        media = media?.toEntry(),
+    )
+
+internal fun org.khord.shared.storage.MediaAttachment.toEntry(): MediaEntry =
+    MediaEntry(
+        mediaId = mediaId,
+        mediaKey = mediaKey,
+        mediaNonce = mediaNonce,
+        mediaRelay = mediaRelay,
+        thumbnail = thumbnail,
+        cachedPath = cachedPath,
     )
 
 // Tiny helper: exposed only so Messaging can validate QR payload bindings without

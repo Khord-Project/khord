@@ -20,7 +20,20 @@ CREATE TABLE message (
     -- message_uuid of the message this one replies to (quote-reply,
     -- #61). Nullable; null = not a reply. Quoted text is resolved
     -- locally by UUID at render time, never carried on the wire.
-    reply_to_uuid       TEXT
+    reply_to_uuid       TEXT,
+    -- ── Image attachments (ADR 029). All nullable; null on a plain
+    -- text message. The full image is NEVER stored in this (encrypted)
+    -- DB — only its decryption material, a tiny encrypted thumbnail for
+    -- instant inline preview, and a filesystem path to the decrypted
+    -- full image once it has been downloaded/cached. media_key/_nonce
+    -- are the one-time XChaCha20-Poly1305 key/nonce; thumbnail is the
+    -- encrypted thumbnail bytes (decrypted at render time).
+    media_id            TEXT,
+    media_key           BLOB,
+    media_nonce         BLOB,
+    media_relay         TEXT,
+    thumbnail           BLOB,
+    media_cached_path   TEXT
 );
 
 CREATE INDEX message_by_contact ON message(contact_fingerprint, id);
@@ -29,14 +42,21 @@ CREATE INDEX message_by_uuid ON message(message_uuid);
 insertMessage:
 INSERT INTO message(
     contact_fingerprint, direction, body, timestamp, stored_at,
-    message_uuid, reply_to_uuid
-) VALUES (?, ?, ?, ?, ?, ?, ?);
+    message_uuid, reply_to_uuid,
+    media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectMessagesByContact:
-SELECT id, direction, body, timestamp, stored_at, message_uuid, edited, reply_to_uuid
+SELECT id, direction, body, timestamp, stored_at, message_uuid, edited, reply_to_uuid,
+       media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path
   FROM message
  WHERE contact_fingerprint = ?
  ORDER BY id ASC;
+
+-- Set the local cache path after a full image has been downloaded +
+-- decrypted to private storage (ADR 029). Targets by row id.
+updateMessageMediaCachedPath:
+UPDATE message SET media_cached_path = ? WHERE id = ?;
 
 selectMessageByUuid:
 SELECT id, contact_fingerprint, direction, body, timestamp, message_uuid, edited, reply_to_uuid

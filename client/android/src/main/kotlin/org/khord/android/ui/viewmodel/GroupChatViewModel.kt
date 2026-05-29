@@ -1,5 +1,7 @@
 package org.khord.android.ui.viewmodel
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +19,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.khord.android.AppContainer
+import org.khord.android.media.ImageProcessor
+import org.khord.android.media.MediaCache
 import org.khord.shared.protocol.orchestrator.GroupEntry
 import org.khord.shared.protocol.orchestrator.GroupMessageEntry
 
@@ -48,6 +52,8 @@ class GroupChatViewModel(
          * by [clearError] when the dialog dismisses.
          */
         val errorCause: Throwable? = null,
+        /** media_ids whose full image is currently being fetched/decrypted (ADR 029). */
+        val downloadingMediaIds: Set<String> = emptySet(),
     )
 
     /** Called by GroupChatScreen after the user dismisses the bug-report dialog. */
@@ -138,6 +144,62 @@ class GroupChatViewModel(
                     }
                 }
                 _state.update { it.copy(sending = false) }
+            }
+        }
+    }
+
+    /** Send an image to the group (ADR 029). See [ChatViewModel.sendImage]. */
+    fun sendImage(context: Context, uri: Uri, caption: String) {
+        val appContext = context.applicationContext
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                _state.update { it.copy(sending = true, error = null) }
+                runCatching {
+                    val messaging = AppContainer.messaging ?: error("not initialised")
+                    val processed = ImageProcessor.process(appContext, uri)
+                    val mediaId = messaging.sendGroupImageMessage(
+                        groupId = groupId,
+                        fullImageBytes = processed.full,
+                        thumbnailBytes = processed.thumbnail,
+                        caption = caption.trim(),
+                    )
+                    val path = MediaCache.write(appContext, mediaId, processed.full)
+                    messaging.groupMessageHistory(groupId)
+                        .firstOrNull { it.media?.mediaId == mediaId }
+                        ?.let { messaging.setGroupMessageImageCached(it.id, path) }
+                    reloadLockedInternal()
+                }.onFailure { e ->
+                    _state.update {
+                        it.copy(error = e.message ?: e::class.simpleName, errorCause = e)
+                    }
+                }
+                _state.update { it.copy(sending = false) }
+            }
+        }
+    }
+
+    /** Download + decrypt a received group image. See [ChatViewModel.downloadImage]. */
+    fun downloadImage(context: Context, messageId: Long, mediaId: String) {
+        val appContext = context.applicationContext
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                if (mediaId in _state.value.downloadingMediaIds) return@withLock
+                _state.update { it.copy(downloadingMediaIds = it.downloadingMediaIds + mediaId) }
+            }
+            runCatching {
+                val messaging = AppContainer.messaging ?: error("not initialised")
+                val media = messaging.groupMessageHistory(groupId)
+                    .firstOrNull { it.id == messageId }?.media
+                    ?: error("attachment not found")
+                val bytes = messaging.fetchImage(media)
+                val path = MediaCache.write(appContext, mediaId, bytes)
+                messaging.setGroupMessageImageCached(messageId, path)
+            }.onFailure { e ->
+                _state.update { it.copy(error = e.message ?: e::class.simpleName, errorCause = e) }
+            }
+            mutex.withLock {
+                _state.update { it.copy(downloadingMediaIds = it.downloadingMediaIds - mediaId) }
+                reloadLockedInternal()
             }
         }
     }

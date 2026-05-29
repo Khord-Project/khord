@@ -162,8 +162,12 @@ internal interface Persistence {
         timestamp: String,
         messageUuid: String? = null,
         replyToUuid: String? = null,
+        media: MediaAttachment? = null,
     )
     suspend fun loadMessages(contactFingerprint: String): List<StoredMessage>
+
+    /** Set the local cache path on a 1:1 message after its full image is fetched (ADR 029). */
+    suspend fun setMessageMediaCachedPath(messageId: Long, cachedPath: String)
 
     /**
      * Look up a 1:1 message by its UUID. Returns null if no row matches
@@ -227,9 +231,13 @@ internal interface Persistence {
         direction: MessageDirection,
         messageUuid: String? = null,
         replyToUuid: String? = null,
+        media: MediaAttachment? = null,
     )
 
     suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord>
+
+    /** Group equivalent of [setMessageMediaCachedPath] (ADR 029). */
+    suspend fun setGroupMessageMediaCachedPath(messageId: Long, cachedPath: String)
 
     /**
      * Full-text search (FTS5) across all 1:1 + group message bodies
@@ -370,6 +378,28 @@ internal data class SessionRecord(
 internal enum class MessageDirection { SENT, RECEIVED }
 
 /**
+ * Image-attachment coordinates persisted alongside a message (ADR 029).
+ * Bundled so the many message APIs don't sprout six parameters each.
+ *
+ * - [mediaKey] / [mediaNonce]: the one-time XChaCha20-Poly1305 key + nonce
+ *   (raw bytes). The thumbnail nonce is derived from [mediaNonce].
+ * - [thumbnail]: ENCRYPTED thumbnail bytes (ct||tag), decrypted at render.
+ * - [cachedPath]: filesystem path to the decrypted full image once fetched,
+ *   or null until the recipient taps to download (the sender sets it after
+ *   upload, since the relay's one-time read won't let it re-fetch its own).
+ *
+ * The full image bytes never live in the DB — only here, by reference.
+ */
+internal data class MediaAttachment(
+    val mediaId: String,
+    val mediaKey: ByteArray,
+    val mediaNonce: ByteArray,
+    val mediaRelay: String,
+    val thumbnail: ByteArray,
+    val cachedPath: String? = null,
+)
+
+/**
  * One full-text search hit (#60). [conversationId] is a contact
  * fingerprint for 1:1 hits or a group_id for group hits;
  * [isGroup] disambiguates so the UI can route the tap to the right
@@ -393,6 +423,8 @@ internal data class StoredMessage(
     val messageUuid: String? = null,
     val edited: Boolean = false,
     val replyToUuid: String? = null,
+    /** Image attachment (ADR 029), or null for a plain text message. */
+    val media: MediaAttachment? = null,
 )
 
 /**
@@ -438,6 +470,8 @@ internal data class GroupMessageRecord(
     val messageUuid: String? = null,
     val edited: Boolean = false,
     val replyToUuid: String? = null,
+    /** Image attachment (ADR 029), or null for a plain text message. */
+    val media: MediaAttachment? = null,
 )
 
 /**

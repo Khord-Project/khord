@@ -33,6 +33,24 @@ internal object PowMiner {
         }
     }
 
+    /**
+     * Lowercase hex SHA-256 of [data]. Used as the PoW subject for media
+     * uploads (ADR 029): the relay verifies SHA-256(sha256_hex(blob) ||
+     * nonce), binding a mined nonce to one specific blob.
+     */
+    fun sha256Hex(data: ByteArray): String {
+        val digest = Hash.sha256(data.toUByteArray()).toByteArray()
+        return buildString(digest.size * 2) {
+            for (b in digest) {
+                val v = b.toInt() and 0xff
+                append(HEX[v ushr 4])
+                append(HEX[v and 0x0f])
+            }
+        }
+    }
+
+    private const val HEX = "0123456789abcdef"
+
     internal fun leadingZeroBits(digest: ByteArray): Int {
         var count = 0
         for (b in digest) {

@@ -169,6 +169,7 @@ internal class InMemoryPersistence : Persistence {
         timestamp: String,
         messageUuid: String?,
         replyToUuid: String?,
+        media: MediaAttachment?,
     ) {
         val msg = StoredMessage(
             id = nextMessageId++,
@@ -179,12 +180,23 @@ internal class InMemoryPersistence : Persistence {
             messageUuid = messageUuid,
             edited = false,
             replyToUuid = replyToUuid,
+            media = media,
         )
         messages += contactFingerprint to msg
     }
 
     override suspend fun loadMessages(contactFingerprint: String): List<StoredMessage> =
         messages.filter { it.first == contactFingerprint }.map { it.second }.sortedBy { it.id }
+
+    override suspend fun setMessageMediaCachedPath(messageId: Long, cachedPath: String) {
+        for (i in messages.indices) {
+            val (fp, msg) = messages[i]
+            if (msg.id == messageId && msg.media != null) {
+                messages[i] = fp to msg.copy(media = msg.media.copy(cachedPath = cachedPath))
+                return
+            }
+        }
+    }
 
     override suspend fun findMessageByUuid(messageUuid: String): MessageLookup? {
         if (messageUuid.isEmpty()) return null
@@ -270,6 +282,7 @@ internal class InMemoryPersistence : Persistence {
         direction: MessageDirection,
         messageUuid: String?,
         replyToUuid: String?,
+        media: MediaAttachment?,
     ) {
         val msg = GroupMessageRecord(
             id = nextGroupMessageId++,
@@ -282,12 +295,23 @@ internal class InMemoryPersistence : Persistence {
             messageUuid = messageUuid,
             edited = false,
             replyToUuid = replyToUuid,
+            media = media,
         )
         groupMessages += groupId to msg
     }
 
     override suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord> =
         groupMessages.filter { it.first == groupId }.map { it.second }.sortedBy { it.id }
+
+    override suspend fun setGroupMessageMediaCachedPath(messageId: Long, cachedPath: String) {
+        for (i in groupMessages.indices) {
+            val (gid, msg) = groupMessages[i]
+            if (msg.id == messageId && msg.media != null) {
+                groupMessages[i] = gid to msg.copy(media = msg.media.copy(cachedPath = cachedPath))
+                return
+            }
+        }
+    }
 
     override suspend fun searchMessages(query: String): List<SearchResult> {
         // No FTS engine in the in-memory store — fall back to a simple

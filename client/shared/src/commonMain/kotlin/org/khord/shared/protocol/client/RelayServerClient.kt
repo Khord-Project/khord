@@ -3,13 +3,17 @@ package org.khord.shared.protocol.client
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.bearerAuth
+import io.ktor.client.request.forms.MultiPartFormDataContent
+import io.ktor.client.request.forms.formData
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.readRawBytes
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import org.khord.shared.protocol.Base64Std
@@ -22,6 +26,7 @@ import org.khord.shared.protocol.wire.FetchedMessage
 import org.khord.shared.protocol.wire.PowParamsResponse
 import org.khord.shared.protocol.wire.SendMessageRequest
 import org.khord.shared.protocol.wire.SendMessageResponse
+import org.khord.shared.protocol.wire.UploadMediaResponse
 
 /**
  * Stateless Relay Server REST client — PROTOCOL.md §5.
@@ -90,6 +95,55 @@ internal class RelayServerClient(
         if (response.status == HttpStatusCode.Unauthorized) throw ProtocolError.AuthFailed()
         require(response.status.value == 200, response)
         return response.body<FetchMessagesResponse>().messages
+    }
+
+    /**
+     * ADR 029 — upload an encrypted media blob. NO auth (proof-of-work
+     * only); the PoW nonce must solve SHA-256(sha256_hex(blob) || nonce),
+     * mined by the caller. Returns the relay-assigned media id.
+     *
+     * Sent as multipart/form-data with a binary `file` part (so the 10 MiB
+     * cap isn't inflated 33% by base64) + a `proof_of_work` form field. The
+     * `file` part carries a filename so FastAPI treats it as an upload.
+     */
+    suspend fun uploadMedia(encryptedBlob: ByteArray, proofOfWork: String): String {
+        val response: HttpResponse = http.post("$baseUrl/v1/media") {
+            setBody(
+                MultiPartFormDataContent(
+                    formData {
+                        append("proof_of_work", proofOfWork)
+                        append(
+                            key = "file",
+                            value = encryptedBlob,
+                            headers = io.ktor.http.Headers.build {
+                                append(HttpHeaders.ContentType, "application/octet-stream")
+                                append(HttpHeaders.ContentDisposition, "filename=\"blob\"")
+                            },
+                        )
+                    },
+                ),
+            )
+        }
+        if (response.status.value == 413) {
+            throw ProtocolError.HttpError(413, "media too large")
+        }
+        require(response.status.value in 200..299, response)
+        return response.body<UploadMediaResponse>().mediaId
+    }
+
+    /**
+     * ADR 029 — fetch an encrypted media blob by id. NO auth (the random id
+     * is the capability). One-time read: the relay deletes the blob on the
+     * first successful fetch, so a 404 here means "already consumed, gone,
+     * or expired". Returns the raw encrypted bytes for the caller to decrypt.
+     */
+    suspend fun downloadMedia(mediaId: String): ByteArray {
+        val response: HttpResponse = http.get("$baseUrl/v1/media/$mediaId")
+        if (response.status == HttpStatusCode.NotFound) {
+            throw ProtocolError.HttpError(404, "media not found or already fetched")
+        }
+        require(response.status.value == 200, response)
+        return response.readRawBytes()
     }
 
     /** PROTOCOL.md §5.4 — bearer-authed delete of acknowledged messages. */
