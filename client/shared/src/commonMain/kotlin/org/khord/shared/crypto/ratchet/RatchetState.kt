@@ -42,6 +42,22 @@ internal class RatchetState(
         MKSKIPPED = MKSKIPPED.mapValues { it.value.copyOf() }.toMutableMap(),
     )
 
+    /**
+     * Snapshot ONLY the sending-chain fields that [DoubleRatchet.encrypt]
+     * mutates (CKs + Ns). Used to roll back a queued/failed send (ADR 030)
+     * WITHOUT touching the receiving chain — a full [snapshot]/[restoreFrom]
+     * would clobber receive progress that a concurrent, unsynchronised
+     * receiveMessages() may have committed while the send's relay POST was
+     * in flight.
+     */
+    fun snapshotSendChain(): SendChainSnapshot = SendChainSnapshot(CKs = CKs?.copyOf(), Ns = Ns)
+
+    /** Roll the sending chain back to a [snapshotSendChain] result. */
+    fun restoreSendChain(s: SendChainSnapshot) {
+        CKs = s.CKs?.copyOf()
+        Ns = s.Ns
+    }
+
     /** Restore state from a snapshot — used to roll back after a failed decrypt. */
     fun restoreFrom(s: RatchetSnapshot) {
         DHs = X25519KeyPair(s.DHs.publicKey.copyOf(), s.DHs.secretKey.copyOf())
@@ -67,6 +83,12 @@ internal class SkippedKey(val dhPub: ByteArray, val n: Int) {
 
     override fun hashCode(): Int = dhPub.contentHashCode() * 31 + n
 }
+
+/** Sending-chain-only snapshot for encrypt rollback (ADR 030). */
+internal data class SendChainSnapshot(
+    val CKs: ByteArray?,
+    val Ns: Int,
+)
 
 internal data class RatchetSnapshot(
     val DHs: X25519KeyPair,

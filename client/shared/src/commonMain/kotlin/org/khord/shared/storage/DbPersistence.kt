@@ -253,6 +253,10 @@ internal class DbPersistence(
         // of FK pragma state.
         db.transaction {
             db.messageQueries.deleteMessagesForContact(fingerprint)
+            // Drop any queued (undelivered) messages for this contact too —
+            // the outbox has no FK to contact, and retrying into a
+            // torn-down session would fail forever (ADR 030).
+            db.outboxQueries.deleteOutboxForContact(fingerprint)
             db.sessionQueries.deleteSession(fingerprint)
             db.contactQueries.deleteContact(fingerprint)
         }
@@ -346,6 +350,7 @@ internal class DbPersistence(
         messageUuid: String?,
         replyToUuid: String?,
         media: MediaAttachment?,
+        deliveryStatus: String?,
     ) {
         db.messageQueries.insertMessage(
             contact_fingerprint = contactFingerprint,
@@ -361,6 +366,7 @@ internal class DbPersistence(
             media_relay = media?.mediaRelay,
             thumbnail = media?.thumbnail,
             media_cached_path = media?.cachedPath,
+            delivery_status = deliveryStatus,
         )
     }
 
@@ -379,11 +385,16 @@ internal class DbPersistence(
                     it.media_id, it.media_key, it.media_nonce,
                     it.media_relay, it.thumbnail, it.media_cached_path,
                 ),
+                deliveryStatus = it.delivery_status,
             )
         }
 
     override suspend fun setMessageMediaCachedPath(messageId: Long, cachedPath: String) {
         db.messageQueries.updateMessageMediaCachedPath(cachedPath, messageId)
+    }
+
+    override suspend fun updateMessageDeliveryStatus(messageUuid: String, status: String) {
+        db.messageQueries.updateMessageDeliveryStatus(status, messageUuid)
     }
 
     override suspend fun findMessageByUuid(messageUuid: String): MessageLookup? {
@@ -460,6 +471,10 @@ internal class DbPersistence(
         db.transaction {
             db.groupMessageQueries.deleteGroupMessages(groupId)
             db.groupMemberQueries.deleteAllGroupMembers(groupId)
+            // Drop queued (undelivered) group messages too — no FK, and
+            // retaining their plaintext/image BLOBs / phantom-delivering
+            // them after the group is gone is wrong (ADR 030).
+            db.outboxQueries.deleteOutboxForGroup(groupId)
             db.groupQueries.deleteGroup(groupId)
         }
     }
@@ -491,6 +506,7 @@ internal class DbPersistence(
         messageUuid: String?,
         replyToUuid: String?,
         media: MediaAttachment?,
+        deliveryStatus: String?,
     ) {
         db.groupMessageQueries.insertGroupMessage(
             group_id = groupId,
@@ -508,11 +524,96 @@ internal class DbPersistence(
             media_relay = media?.mediaRelay,
             thumbnail = media?.thumbnail,
             media_cached_path = media?.cachedPath,
+            delivery_status = deliveryStatus,
         )
     }
 
     override suspend fun setGroupMessageMediaCachedPath(messageId: Long, cachedPath: String) {
         db.groupMessageQueries.updateGroupMessageMediaCachedPath(cachedPath, messageId)
+    }
+
+    override suspend fun updateGroupMessageDeliveryStatus(messageUuid: String, status: String) {
+        db.groupMessageQueries.updateGroupMessageDeliveryStatus(status, messageUuid)
+    }
+
+    // ── Outbox (ADR 030) ─────────────────────────────────────────────────────
+
+    override suspend fun insertOutbox(item: OutboxItem) {
+        db.outboxQueries.insertOutbox(
+            contact_fingerprint = item.contactFingerprint,
+            group_id = item.groupId,
+            body = item.body,
+            full_image = item.fullImage,
+            thumbnail = item.thumbnail,
+            media_key = item.mediaKey,
+            media_nonce = item.mediaNonce,
+            reply_to_uuid = item.replyToUuid,
+            message_uuid = item.messageUuid,
+            created_at = item.createdAt,
+            attempts = item.attempts,
+            last_error = item.lastError,
+            status = item.status,
+        )
+    }
+
+    override suspend fun loadOutbox(): List<OutboxItem> =
+        db.outboxQueries.selectOutbox().executeAsList().map {
+            OutboxItem(
+                id = it.id,
+                contactFingerprint = it.contact_fingerprint,
+                groupId = it.group_id,
+                body = it.body,
+                fullImage = it.full_image,
+                thumbnail = it.thumbnail,
+                mediaKey = it.media_key,
+                mediaNonce = it.media_nonce,
+                replyToUuid = it.reply_to_uuid,
+                messageUuid = it.message_uuid,
+                createdAt = it.created_at,
+                attempts = it.attempts,
+                lastError = it.last_error,
+                status = it.status,
+            )
+        }
+
+    override suspend fun updateOutboxStatus(id: Long, status: String, error: String?) {
+        db.outboxQueries.updateOutboxStatus(status, error, id)
+    }
+
+    override suspend fun incrementOutboxAttempts(id: Long) {
+        db.outboxQueries.incrementOutboxAttempts(id)
+    }
+
+    override suspend fun deleteOutboxItem(id: Long) {
+        db.outboxQueries.deleteOutboxItem(id)
+    }
+
+    override suspend fun deleteOutboxForContact(contactFingerprint: String) {
+        db.outboxQueries.deleteOutboxForContact(contactFingerprint)
+    }
+
+    override suspend fun deleteOutboxForGroup(groupId: String) {
+        db.outboxQueries.deleteOutboxForGroup(groupId)
+    }
+
+    override suspend fun resetOutboxByUuid(messageUuid: String) {
+        db.outboxQueries.resetOutboxByUuid(messageUuid)
+    }
+
+    override suspend fun deleteOutboxByUuid(messageUuid: String) {
+        db.outboxQueries.deleteOutboxByUuid(messageUuid)
+    }
+
+    override suspend fun deleteMessageByUuid(messageUuid: String) {
+        db.messageQueries.deleteMessageByUuid(messageUuid)
+    }
+
+    override suspend fun deleteGroupMessageByUuid(messageUuid: String) {
+        db.groupMessageQueries.deleteGroupMessageByUuid(messageUuid)
+    }
+
+    override suspend fun clearOutbox() {
+        db.outboxQueries.clearOutbox()
     }
 
     /**
@@ -571,6 +672,7 @@ internal class DbPersistence(
                     it.media_id, it.media_key, it.media_nonce,
                     it.media_relay, it.thumbnail, it.media_cached_path,
                 ),
+                deliveryStatus = it.delivery_status,
             )
         }
 

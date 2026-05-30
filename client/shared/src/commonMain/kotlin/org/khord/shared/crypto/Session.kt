@@ -35,6 +35,22 @@ internal class Session(
     /** Snapshot the current ratchet state for persistence (the live mutable instance). */
     internal fun ratchetStateForPersistence(): RatchetState = ratchetState
 
+    /**
+     * Snapshot the SENDING chain for copy-on-encrypt rollback (ADR 030).
+     * [encrypt] advances only CKs + Ns in place; when a send is queued for
+     * offline retry we roll those back so the retry re-encrypts from the
+     * identical position. Deliberately NOT a full-state snapshot: the
+     * receiving chain is mutated by an unsynchronised receiveMessages() and
+     * must never be clobbered by a send rollback.
+     */
+    internal fun snapshotSendChain(): org.khord.shared.crypto.ratchet.SendChainSnapshot =
+        ratchetState.snapshotSendChain()
+
+    /** Roll the sending chain back after a failed send. */
+    internal fun restoreSendChain(snapshot: org.khord.shared.crypto.ratchet.SendChainSnapshot) {
+        ratchetState.restoreSendChain(snapshot)
+    }
+
     companion object {
         /**
          * Alice's session-bootstrap from a fresh X3DH initiator output.

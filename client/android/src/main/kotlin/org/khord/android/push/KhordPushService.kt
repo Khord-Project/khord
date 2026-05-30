@@ -4,6 +4,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -45,9 +47,33 @@ class KhordPushService : Service() {
     private var listener: PushSignalListener? = null
     private var stateMirrorJob: Job? = null
 
+    private var connectivityManager: ConnectivityManager? = null
+
+    /**
+     * Network-availability callback (ADR 030). When connectivity returns,
+     * drain the offline outbox — the prime trigger for delivering messages
+     * the user composed while offline. Cheap when the queue is empty.
+     */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            scope.launch(Dispatchers.IO) {
+                DiagnosticLog.log("Khord", "network available — draining outbox")
+                runCatching { AppContainer.messaging?.drainOutbox() }
+                    .onFailure { Log.w(TAG, "drainOutbox on network-available failed", it) }
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+        // Drain the offline outbox whenever the network comes back (ADR 030).
+        runCatching {
+            connectivityManager = getSystemService(ConnectivityManager::class.java)?.also {
+                it.registerDefaultNetworkCallback(networkCallback)
+            }
+        }.onFailure { Log.w(TAG, "registerDefaultNetworkCallback failed", it) }
 
         KhordNotifications.ensureChannel(this)
         val notif = KhordNotifications.foregroundServiceNotification(this)
@@ -163,6 +189,7 @@ class KhordPushService : Service() {
 
     override fun onDestroy() {
         stateMirrorJob?.cancel()
+        runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
         scope.launch {
             try { listener?.stop() } catch (_: Throwable) { /* best effort */ }
             scope.cancel()
@@ -200,7 +227,17 @@ class KhordPushService : Service() {
                     AppContainer.pushConnected.value = connected
                     val newlyConnected = connected - previouslyConnected
                     previouslyConnected = connected
-                    for (fp in newlyConnected) handlePush(fp)
+                    if (newlyConnected.isNotEmpty()) {
+                        for (fp in newlyConnected) handlePush(fp)
+                        // A reconnect also means the relay is reachable again
+                        // — flush any messages queued while offline (ADR 030).
+                        // This .onEach runs on the Main-immediate scope, so
+                        // hop to IO: drainOutbox does network + DB work.
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { AppContainer.messaging?.drainOutbox() }
+                                .onFailure { Log.w(TAG, "drainOutbox on reconnect failed", it) }
+                        }
+                    }
                 }
                 .launchIn(scope)
             listener = l

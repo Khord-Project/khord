@@ -91,6 +91,8 @@ class GroupChatViewModel(
     fun startPolling() {
         if (pollJob?.isActive == true) return
         pollJob = viewModelScope.launch(Dispatchers.IO) {
+            // Flush any group messages queued offline on open (ADR 030).
+            runCatching { AppContainer.messaging?.drainOutbox() }
             while (isActive) {
                 reloadLocked()
                 delay(2_000)
@@ -157,15 +159,15 @@ class GroupChatViewModel(
                 runCatching {
                     val messaging = AppContainer.messaging ?: error("not initialised")
                     val processed = ImageProcessor.process(appContext, uri)
-                    val mediaId = messaging.sendGroupImageMessage(
+                    val messageUuid = messaging.sendGroupImageMessage(
                         groupId = groupId,
                         fullImageBytes = processed.full,
                         thumbnailBytes = processed.thumbnail,
                         caption = caption.trim(),
                     )
-                    val path = MediaCache.write(appContext, mediaId, processed.full)
+                    val path = MediaCache.write(appContext, messageUuid, processed.full)
                     messaging.groupMessageHistory(groupId)
-                        .firstOrNull { it.media?.mediaId == mediaId }
+                        .firstOrNull { it.messageUuid == messageUuid }
                         ?.let { messaging.setGroupMessageImageCached(it.id, path) }
                     reloadLockedInternal()
                 }.onFailure { e ->
@@ -200,6 +202,36 @@ class GroupChatViewModel(
             mutex.withLock {
                 _state.update { it.copy(downloadingMediaIds = it.downloadingMediaIds - mediaId) }
                 reloadLockedInternal()
+            }
+        }
+    }
+
+    /** Manual "Retry" on a failed group message (ADR 030). */
+    fun retryMessage(messageUuid: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                runCatching {
+                    val messaging = AppContainer.messaging ?: error("not initialised")
+                    messaging.retryFailedMessage(messageUuid, isGroup = true)
+                    reloadLockedInternal()
+                }.onFailure { e ->
+                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                }
+            }
+        }
+    }
+
+    /** Manual "Delete" on a failed group message (ADR 030). */
+    fun deleteMessage(messageUuid: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                runCatching {
+                    val messaging = AppContainer.messaging ?: error("not initialised")
+                    messaging.deleteFailedMessage(messageUuid, isGroup = true)
+                    reloadLockedInternal()
+                }.onFailure { e ->
+                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                }
             }
         }
     }

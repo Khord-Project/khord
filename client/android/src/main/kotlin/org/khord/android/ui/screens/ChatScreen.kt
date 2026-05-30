@@ -230,6 +230,8 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                         },
                         onDownloadImage = { vm.downloadImage(context, msg.id, it) },
                         onOpenImage = { path -> fullScreen = FullScreenImage(path, msg.body) },
+                        onRetryFailed = { vm.retryMessage(it) },
+                        onDeleteFailed = { vm.deleteMessage(it) },
                     )
                 }
             }
@@ -441,6 +443,8 @@ private fun MessageRow(
     onQuotedTap: () -> Unit,
     onDownloadImage: (mediaId: String) -> Unit,
     onOpenImage: (path: String) -> Unit,
+    onRetryFailed: (uuid: String) -> Unit,
+    onDeleteFailed: (uuid: String) -> Unit,
 ) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val arrange = if (isSent) Arrangement.End else Arrangement.Start
@@ -479,16 +483,36 @@ private fun MessageRow(
                 )
             }
         }
-        // Timestamp + optional (edited) tag on the same line. The
-        // tag goes after the time, in the same muted style.
+        // Timestamp + optional (edited) tag + delivery-status indicator on
+        // one line, in the same muted style.
         val timestampLabel = TimestampFormat.formatMessageTime(msg.timestamp)
         val full = if (msg.edited) "$timestampLabel · (edited)" else timestampLabel
-        Text(
-            full,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        var showFailedDialog by remember(msg.messageUuid) { mutableStateOf(false) }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-        )
+        ) {
+            Text(
+                full,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (isSent && msg.deliveryStatus != null) {
+                Spacer(Modifier.width(4.dp))
+                DeliveryStatusIndicator(
+                    status = msg.deliveryStatus,
+                    onFailedTap = { showFailedDialog = true },
+                )
+            }
+        }
+        val failedUuid = msg.messageUuid
+        if (showFailedDialog && failedUuid != null) {
+            FailedMessageDialog(
+                onRetry = { onRetryFailed(failedUuid) },
+                onDelete = { onDeleteFailed(failedUuid) },
+                onDismiss = { showFailedDialog = false },
+            )
+        }
     }
 }
 

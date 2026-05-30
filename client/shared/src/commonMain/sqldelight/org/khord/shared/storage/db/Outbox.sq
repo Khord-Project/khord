@@ -1,0 +1,93 @@
+-- Offline outbound message queue (ADR 030, #59).
+--
+-- A message the user composed but that the relay hasn't accepted yet —
+-- because the network was down, the relay was unreachable, or a transient
+-- error. The corresponding `message` / `group_message` row already exists
+-- (saved with delivery_status='pending' the moment the user hit send), so
+-- this table holds only what's needed to RE-ATTEMPT delivery; the chat
+-- history reads from the message tables, not here.
+--
+-- Plaintext at rest: per ADR 030 the queue stores the plaintext body (+
+-- plaintext image bytes) and encrypts at DELIVERY time, not queue time —
+-- so the Double Ratchet advances in actual send order and stays consistent
+-- across queued + live sends. The whole DB is SQLCipher-encrypted, so this
+-- plaintext is protected at rest.
+--
+-- Image bytes are stored as BLOBs (full_image + thumbnail) rather than the
+-- spec's media_local_path: drainOutbox() runs in commonMain, which has no
+-- multiplatform filesystem API, so it can neither write the file at queue
+-- time nor read it at drain time. The bytes are already EXIF-stripped and
+-- downscaled (ImageProcessor); the retry cap + delete-on-success bound the
+-- growth. media_key / media_nonce carry the per-image one-time
+-- XChaCha20-Poly1305 key so retries reuse it deterministically.
+CREATE TABLE outbox (
+    id                  INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    -- Exactly one of these is non-null: contact_fingerprint for a 1:1
+    -- message, group_id for a group message.
+    contact_fingerprint TEXT,
+    group_id            TEXT,
+    body                TEXT    NOT NULL,
+    -- Image attachment (null for a plain text message).
+    full_image          BLOB,
+    thumbnail           BLOB,
+    media_key           BLOB,
+    media_nonce         BLOB,
+    reply_to_uuid       TEXT,
+    -- Pre-generated at send time so the chat-history row and the queue
+    -- row share one id, and a later edit can target it.
+    message_uuid        TEXT    NOT NULL,
+    created_at          TEXT    NOT NULL,
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    last_error          TEXT,
+    -- 'pending' (waiting / will retry), 'sending' (a drain pass has it in
+    -- flight), 'failed' (gave up after the attempt cap).
+    status              TEXT    NOT NULL DEFAULT 'pending'
+);
+
+-- Drain in send order: created_at, then id as a stable tiebreaker for
+-- items queued within the same clock tick.
+CREATE INDEX outbox_by_created ON outbox(created_at, id);
+
+insertOutbox:
+INSERT INTO outbox(
+    contact_fingerprint, group_id, body, full_image, thumbnail,
+    media_key, media_nonce, reply_to_uuid, message_uuid, created_at,
+    attempts, last_error, status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectOutbox:
+SELECT id, contact_fingerprint, group_id, body, full_image, thumbnail,
+       media_key, media_nonce, reply_to_uuid, message_uuid, created_at,
+       attempts, last_error, status
+  FROM outbox
+ ORDER BY created_at ASC, id ASC;
+
+updateOutboxStatus:
+UPDATE outbox SET status = ?, last_error = ? WHERE id = ?;
+
+incrementOutboxAttempts:
+UPDATE outbox SET attempts = attempts + 1 WHERE id = ?;
+
+deleteOutboxItem:
+DELETE FROM outbox WHERE id = ?;
+
+-- Reset a failed item so the next drain retries it (manual "Retry").
+resetOutboxByUuid:
+UPDATE outbox SET attempts = 0, status = 'pending', last_error = NULL WHERE message_uuid = ?;
+
+-- Drop a queued item by its message UUID (manual "Delete").
+deleteOutboxByUuid:
+DELETE FROM outbox WHERE message_uuid = ?;
+
+-- Drop every queued message for a contact — used when a contact is
+-- deleted so we don't retry into a torn-down session (ADR 030).
+deleteOutboxForContact:
+DELETE FROM outbox WHERE contact_fingerprint = ?;
+
+-- Drop every queued message for a group — used when the group is deleted
+-- so we don't retain its plaintext/image BLOBs or phantom-deliver it.
+deleteOutboxForGroup:
+DELETE FROM outbox WHERE group_id = ?;
+
+clearOutbox:
+DELETE FROM outbox;

@@ -198,6 +198,8 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                         },
                         onDownloadImage = { vm.downloadImage(context, msg.id, it) },
                         onOpenImage = { path -> fullScreen = GroupFullScreenImage(path, msg.body) },
+                        onRetryFailed = { vm.retryMessage(it) },
+                        onDeleteFailed = { vm.deleteMessage(it) },
                     )
                 }
             }
@@ -360,6 +362,8 @@ private fun GroupMessageRow(
     onQuotedTap: () -> Unit,
     onDownloadImage: (mediaId: String) -> Unit,
     onOpenImage: (path: String) -> Unit,
+    onRetryFailed: (uuid: String) -> Unit,
+    onDeleteFailed: (uuid: String) -> Unit,
 ) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val align = if (isSent) Alignment.End else Alignment.Start
@@ -404,11 +408,31 @@ private fun GroupMessageRow(
         }
         val timestampLabel = TimestampFormat.formatMessageTime(msg.timestamp)
         val full = if (msg.edited) "$timestampLabel · (edited)" else timestampLabel
-        Text(
-            full,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        var showFailedDialog by remember(msg.messageUuid) { mutableStateOf(false) }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-        )
+        ) {
+            Text(
+                full,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (isSent && msg.deliveryStatus != null) {
+                Spacer(Modifier.width(4.dp))
+                DeliveryStatusIndicator(
+                    status = msg.deliveryStatus,
+                    onFailedTap = { showFailedDialog = true },
+                )
+            }
+        }
+        val failedUuid = msg.messageUuid
+        if (showFailedDialog && failedUuid != null) {
+            FailedMessageDialog(
+                onRetry = { onRetryFailed(failedUuid) },
+                onDelete = { onDeleteFailed(failedUuid) },
+                onDismiss = { showFailedDialog = false },
+            )
+        }
     }
 }

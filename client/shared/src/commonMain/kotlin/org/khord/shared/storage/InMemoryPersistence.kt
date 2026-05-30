@@ -21,6 +21,10 @@ internal class InMemoryPersistence : Persistence {
     private var nextMessageId = 1L
     private var keyServerToken: KeyServerTokenRecord? = null
 
+    // ── Outbox (ADR 030) ────────────────────────────────────────────────────
+    private val outbox = mutableListOf<OutboxItem>()
+    private var nextOutboxId = 1L
+
     // ── Group state (ADR 023) ───────────────────────────────────────────────
     private val groups = mutableMapOf<String, GroupRecord>()
     private val groupMembers = mutableMapOf<String, MutableMap<String, String>>() // groupId → fingerprint → displayName
@@ -127,6 +131,7 @@ internal class InMemoryPersistence : Persistence {
         contacts.remove(fingerprint)
         sessions.remove(fingerprint)
         messages.removeAll { it.first == fingerprint }
+        outbox.removeAll { it.contactFingerprint == fingerprint }
     }
 
     override suspend fun savePendingMailbox(mailboxId: String, bearerToken: String) {
@@ -170,6 +175,7 @@ internal class InMemoryPersistence : Persistence {
         messageUuid: String?,
         replyToUuid: String?,
         media: MediaAttachment?,
+        deliveryStatus: String?,
     ) {
         val msg = StoredMessage(
             id = nextMessageId++,
@@ -181,6 +187,7 @@ internal class InMemoryPersistence : Persistence {
             edited = false,
             replyToUuid = replyToUuid,
             media = media,
+            deliveryStatus = deliveryStatus,
         )
         messages += contactFingerprint to msg
     }
@@ -193,6 +200,16 @@ internal class InMemoryPersistence : Persistence {
             val (fp, msg) = messages[i]
             if (msg.id == messageId && msg.media != null) {
                 messages[i] = fp to msg.copy(media = msg.media.copy(cachedPath = cachedPath))
+                return
+            }
+        }
+    }
+
+    override suspend fun updateMessageDeliveryStatus(messageUuid: String, status: String) {
+        for (i in messages.indices) {
+            val (fp, msg) = messages[i]
+            if (msg.messageUuid == messageUuid) {
+                messages[i] = fp to msg.copy(deliveryStatus = status)
                 return
             }
         }
@@ -254,6 +271,7 @@ internal class InMemoryPersistence : Persistence {
         groups.remove(groupId)
         groupMembers.remove(groupId)
         groupMessages.removeAll { it.first == groupId }
+        outbox.removeAll { it.groupId == groupId }
     }
 
     override suspend fun addGroupMember(
@@ -283,6 +301,7 @@ internal class InMemoryPersistence : Persistence {
         messageUuid: String?,
         replyToUuid: String?,
         media: MediaAttachment?,
+        deliveryStatus: String?,
     ) {
         val msg = GroupMessageRecord(
             id = nextGroupMessageId++,
@@ -296,6 +315,7 @@ internal class InMemoryPersistence : Persistence {
             edited = false,
             replyToUuid = replyToUuid,
             media = media,
+            deliveryStatus = deliveryStatus,
         )
         groupMessages += groupId to msg
     }
@@ -311,6 +331,79 @@ internal class InMemoryPersistence : Persistence {
                 return
             }
         }
+    }
+
+    override suspend fun updateGroupMessageDeliveryStatus(messageUuid: String, status: String) {
+        for (i in groupMessages.indices) {
+            val (gid, msg) = groupMessages[i]
+            if (msg.messageUuid == messageUuid) {
+                groupMessages[i] = gid to msg.copy(deliveryStatus = status)
+                return
+            }
+        }
+    }
+
+    // ── Outbox (ADR 030) ────────────────────────────────────────────────────
+
+    override suspend fun insertOutbox(item: OutboxItem) {
+        outbox += item.copy(id = nextOutboxId++)
+    }
+
+    override suspend fun loadOutbox(): List<OutboxItem> =
+        outbox.sortedWith(compareBy({ it.createdAt }, { it.id }))
+
+    override suspend fun updateOutboxStatus(id: Long, status: String, error: String?) {
+        for (i in outbox.indices) {
+            if (outbox[i].id == id) {
+                outbox[i] = outbox[i].copy(status = status, lastError = error)
+                return
+            }
+        }
+    }
+
+    override suspend fun incrementOutboxAttempts(id: Long) {
+        for (i in outbox.indices) {
+            if (outbox[i].id == id) {
+                outbox[i] = outbox[i].copy(attempts = outbox[i].attempts + 1)
+                return
+            }
+        }
+    }
+
+    override suspend fun deleteOutboxItem(id: Long) {
+        outbox.removeAll { it.id == id }
+    }
+
+    override suspend fun deleteOutboxForContact(contactFingerprint: String) {
+        outbox.removeAll { it.contactFingerprint == contactFingerprint }
+    }
+
+    override suspend fun deleteOutboxForGroup(groupId: String) {
+        outbox.removeAll { it.groupId == groupId }
+    }
+
+    override suspend fun resetOutboxByUuid(messageUuid: String) {
+        for (i in outbox.indices) {
+            if (outbox[i].messageUuid == messageUuid) {
+                outbox[i] = outbox[i].copy(attempts = 0, status = "pending", lastError = null)
+            }
+        }
+    }
+
+    override suspend fun deleteOutboxByUuid(messageUuid: String) {
+        outbox.removeAll { it.messageUuid == messageUuid }
+    }
+
+    override suspend fun deleteMessageByUuid(messageUuid: String) {
+        messages.removeAll { it.second.messageUuid == messageUuid }
+    }
+
+    override suspend fun deleteGroupMessageByUuid(messageUuid: String) {
+        groupMessages.removeAll { it.second.messageUuid == messageUuid }
+    }
+
+    override suspend fun clearOutbox() {
+        outbox.clear()
     }
 
     override suspend fun searchMessages(query: String): List<SearchResult> {
@@ -388,6 +481,8 @@ internal class InMemoryPersistence : Persistence {
         groupMembers.clear()
         groupMessages.clear()
         nextGroupMessageId = 1L
+        outbox.clear()
+        nextOutboxId = 1L
     }
 
     override suspend fun close() {

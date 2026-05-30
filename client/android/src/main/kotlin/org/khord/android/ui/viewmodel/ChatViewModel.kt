@@ -123,6 +123,9 @@ class ChatViewModel(
             // Opening the conversation is exactly when the user expects to
             // see everything waiting for them.
             fetchOnce()
+            // Also flush any of OUR messages queued offline (ADR 030) —
+            // opening the chat is a natural retry point.
+            runCatching { AppContainer.messaging?.drainOutbox() }
             while (isActive) {
                 // No point polling a contact we've already marked
                 // unavailable — wait for the user to back out and
@@ -233,17 +236,20 @@ class ChatViewModel(
                         it.contactFingerprint == contactFingerprint
                     } ?: error("contact session not found")
                     val processed = ImageProcessor.process(appContext, uri)
-                    val mediaId = messaging.sendImageMessage(
+                    // Returns the message UUID — stable even when the send is
+                    // queued offline (no media id assigned until upload).
+                    val messageUuid = messaging.sendImageMessage(
                         contact = contact,
                         fullImageBytes = processed.full,
                         thumbnailBytes = processed.thumbnail,
                         caption = caption.trim(),
                     )
-                    // Cache the plaintext full image + record its path so the
-                    // sender's own bubble shows the full image immediately.
-                    val path = MediaCache.write(appContext, mediaId, processed.full)
+                    // Cache the plaintext full image (keyed by the UUID) + record
+                    // its path so the sender's own bubble shows the full image
+                    // immediately, online or queued.
+                    val path = MediaCache.write(appContext, messageUuid, processed.full)
                     messaging.messageHistory(contactFingerprint)
-                        .firstOrNull { it.media?.mediaId == mediaId }
+                        .firstOrNull { it.messageUuid == messageUuid }
                         ?.let { messaging.setMessageImageCached(it.id, path) }
                     reloadHistoryLocked()
                 }.onFailure { e ->
@@ -289,6 +295,36 @@ class ChatViewModel(
             mutex.withLock {
                 _state.update { it.copy(downloadingMediaIds = it.downloadingMediaIds - mediaId) }
                 reloadHistoryLocked()
+            }
+        }
+    }
+
+    /** Manual "Retry" on a failed message (ADR 030). */
+    fun retryMessage(messageUuid: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                runCatching {
+                    val messaging = AppContainer.messaging ?: error("not initialised")
+                    messaging.retryFailedMessage(messageUuid, isGroup = false)
+                    reloadHistoryLocked()
+                }.onFailure { e ->
+                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                }
+            }
+        }
+    }
+
+    /** Manual "Delete" on a failed message (ADR 030) — drops queue row + bubble. */
+    fun deleteMessage(messageUuid: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                runCatching {
+                    val messaging = AppContainer.messaging ?: error("not initialised")
+                    messaging.deleteFailedMessage(messageUuid, isGroup = false)
+                    reloadHistoryLocked()
+                }.onFailure { e ->
+                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                }
             }
         }
     }
