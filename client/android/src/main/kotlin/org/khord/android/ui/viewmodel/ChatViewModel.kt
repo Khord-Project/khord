@@ -198,16 +198,15 @@ class ChatViewModel(
                     messaging.sendMessage(contact, trimmed, replyToUuid)
                     reloadHistoryLocked()
                 }.onFailure { e ->
-                    if (looksLikeDeadContact(e)) {
-                        _state.update {
+                    when {
+                        looksLikeDeadContact(e) -> _state.update {
                             it.copy(contactStatus = ContactStatus.Unavailable, error = null)
                         }
-                    } else {
-                        _state.update {
-                            it.copy(
-                                error = e.message ?: e::class.simpleName,
-                                errorCause = e,
-                            )
+                        // Offline: sendMessage already queued it (it appears
+                        // pending); nothing to surface.
+                        isTransientNetwork(e) -> { /* no-op */ }
+                        else -> _state.update {
+                            it.copy(error = e.message ?: e::class.simpleName, errorCause = e)
                         }
                     }
                 }
@@ -253,12 +252,12 @@ class ChatViewModel(
                         ?.let { messaging.setMessageImageCached(it.id, path) }
                     reloadHistoryLocked()
                 }.onFailure { e ->
-                    if (looksLikeDeadContact(e)) {
-                        _state.update {
+                    when {
+                        looksLikeDeadContact(e) -> _state.update {
                             it.copy(contactStatus = ContactStatus.Unavailable, error = null)
                         }
-                    } else {
-                        _state.update {
+                        isTransientNetwork(e) -> { /* offline: queued, appears pending */ }
+                        else -> _state.update {
                             it.copy(error = e.message ?: e::class.simpleName, errorCause = e)
                         }
                     }
@@ -363,12 +362,14 @@ class ChatViewModel(
                 reloadHistoryLocked()
             }.onFailure { e ->
                 AppContainer.recordReceiveFailure(contactFingerprint)
-                if (looksLikeDeadContact(e)) {
-                    _state.update {
+                when {
+                    looksLikeDeadContact(e) -> _state.update {
                         it.copy(contactStatus = ContactStatus.Unavailable, error = null)
                     }
-                } else {
-                    _state.update { it.copy(error = e.message ?: e::class.simpleName) }
+                    // Offline / server unreachable — expected, stay silent so
+                    // the composer keeps working and queued sends can flush.
+                    isTransientNetwork(e) -> { /* no-op */ }
+                    else -> _state.update { it.copy(error = e.message ?: e::class.simpleName) }
                 }
             }
         }
@@ -376,22 +377,25 @@ class ChatViewModel(
 }
 
 /**
- * Heuristic — does this exception look like the contact's relay
- * endpoint is gone? Currently:
- *  - [ProtocolError.HttpError] with HTTP 404 (mailbox not found)
- *  - any [IOException] (connection refused, timeout, DNS failure —
- *    OkHttp wraps these subclasses)
+ * Heuristic — does this exception mean the contact's relay endpoint is
+ * genuinely GONE (account removed), as opposed to a transient network
+ * problem? Only a relay-confirmed **HTTP 404** (mailbox not found) counts:
+ * the relay answered and said the mailbox doesn't exist.
  *
- * Other protocol errors (auth fail on a wrong token, signature
- * failures, etc.) deliberately do NOT trigger unavailable status —
- * those are user-actionable, not "the other side disappeared".
+ * Deliberately does NOT include [IOException] (no connectivity, server
+ * unreachable, timeout). Before the offline queue (ADR 030) we treated any
+ * IOException as "contact gone" and disabled the composer — but that fires
+ * on plain airplane-mode / flaky-network and made compose-while-offline
+ * impossible. Now a network failure is transient: the message is queued and
+ * retried (see [isTransientNetwork]); the composer stays enabled.
  */
-private fun looksLikeDeadContact(e: Throwable): Boolean {
-    if (e is ProtocolError.HttpError && e.status == 404) return true
-    if (e is IOException) return true
-    // Walk one level into cause chain — OkHttp sometimes wraps in
-    // a non-IOException at the Ktor boundary.
-    val cause = e.cause
-    if (cause is IOException) return true
-    return false
-}
+private fun looksLikeDeadContact(e: Throwable): Boolean =
+    e is ProtocolError.HttpError && e.status == 404
+
+/**
+ * Transient network/offline failure (airplane mode, server unreachable,
+ * timeout, DNS). These are expected while offline — don't surface a scary
+ * error banner or disable the chat; the outbox handles redelivery.
+ */
+private fun isTransientNetwork(e: Throwable): Boolean =
+    e is IOException || e.cause is IOException
