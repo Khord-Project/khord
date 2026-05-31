@@ -3,6 +3,7 @@
 package org.khord.shared.protocol.orchestrator
 
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import org.khord.shared.crypto.IdentityKey
 import org.khord.shared.crypto.PreKeyBundle
@@ -71,6 +72,16 @@ class Messaging internal constructor(
 
     private val ksClient = KeyServerClient(http, keyServerUrl)
     private val rsClient = RelayServerClient(http, relayServerUrl)
+
+    /**
+     * Serialises the outbound ratchet operations (sends + [drainOutbox])
+     * against each other (ADR 030). [drainOutbox] is invoked from several
+     * async triggers — connectivity callback, app launch, chat open, push
+     * reconnect — that didn't previously touch the send path; without this
+     * two drains (or a drain + a live send) could interleave encrypt() calls
+     * on the same ratchet and corrupt its state or double-send an item.
+     */
+    private val sendMutex = kotlinx.coroutines.sync.Mutex()
 
     /**
      * Set to true after [panic]. Every public method throws [IllegalStateException]
@@ -524,10 +535,17 @@ class Messaging internal constructor(
      * relay. No local persistence — the caller decides what (if
      * anything) to record locally for this payload type.
      */
+    // edit + group-control sends share the same ratchet as the offline-queue
+    // sends, so they take sendMutex too (ADR 030) — without it, encrypt()
+    // here could interleave with drainOutbox()'s encrypt on the same session
+    // and corrupt CKs/Ns. Per-call locking (these run in member-fan-out
+    // loops) is enough: it only needs to prevent two concurrent encrypts on
+    // one RatchetState. None of the mutex-wrapped sends call these helpers,
+    // so there is no reentrant double-lock.
     private suspend fun sendRatchetPayload(
         contact: ContactSession,
         payload: InnerPayload,
-    ) {
+    ): Unit = sendMutex.withLock {
         val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
             .encodeToByteArray()
         val encrypted = contact.session.encrypt(plaintextBytes)
@@ -973,7 +991,7 @@ class Messaging internal constructor(
         contact: ContactSession,
         text: String,
         replyToUuid: String? = null,
-    ): Long {
+    ): Long = sendMutex.withLock {
         checkAlive()
         // Refuse to send to a blocked contact. The UI hides blocked
         // contacts so this shouldn't be reachable, but guard anyway.
@@ -986,44 +1004,11 @@ class Messaging internal constructor(
         // "message_edit" payload can target this specific message
         // by reference (rather than fragile timestamp+body matching).
         val messageUuid = newMessageUuid()
-        // Always include reply_info on outbound ratchet messages too — costs
-        // ~150 bytes per message and gives us self-healing display-name and
-        // server-URL updates without adding a separate "I-renamed-myself"
-        // message type. Receivers no-op when nothing changed.
-        val payload = InnerPayload(
-            type = "text",
-            timestamp = timestamp,
-            body = text,
-            messageUuid = messageUuid,
-            replyToUuid = replyToUuid,
-            replyInfo = ReplyInfo(
-                mailbox = contact.inboundMailboxId,
-                relayServer = relayServerUrl,
-                keyServer = keyServerUrl,
-                fingerprint = identity.fingerprint,
-                displayName = displayName,
-            ),
-        )
-        val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
-            .encodeToByteArray()
-        val encrypted = contact.session.encrypt(plaintextBytes)
 
-        val envelope = WireEnvelope.Ratchet(
-            header = Base64Std.encode(encrypted.headerBytes),
-            ciphertext = Base64Std.encode(encrypted.ciphertext),
-        )
-        val envelopeBytes = KhordJson
-            .encodeToString(WireEnvelope.serializer(), envelope as WireEnvelope)
-            .encodeToByteArray()
-
-        val rs = if (contact.outboundRelayServer == relayServerUrl) {
-            rsClient
-        } else {
-            RelayServerClient(http, contact.outboundRelayServer)
-        }
-        val sequence = rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
-
-        // Persist message + advanced ratchet state.
+        // ADR 030: save to chat history IMMEDIATELY as 'pending' so the
+        // message shows the instant the user hits send, then attempt
+        // delivery. On failure it's queued in the outbox and the bubble
+        // keeps its pending indicator until a retry succeeds (or gives up).
         persistence.saveMessage(
             contactFingerprint = contact.contactFingerprint,
             direction = org.khord.shared.storage.MessageDirection.SENT,
@@ -1031,10 +1016,106 @@ class Messaging internal constructor(
             timestamp = timestamp,
             messageUuid = messageUuid,
             replyToUuid = replyToUuid,
+            deliveryStatus = "pending",
         )
-        persistSession(contact)
 
+        val payload = textPayload(contact, text, messageUuid, replyToUuid)
+        val sequence = deliverRatchet(contact, payload)
+        if (sequence != null) {
+            persistence.updateMessageDeliveryStatus(messageUuid, "sent")
+        } else {
+            persistence.insertOutbox(
+                org.khord.shared.storage.OutboxItem(
+                    contactFingerprint = contact.contactFingerprint,
+                    body = text,
+                    replyToUuid = replyToUuid,
+                    messageUuid = messageUuid,
+                    createdAt = timestamp,
+                ),
+            )
+            diagnosticLog("message queued for retry (1:1): $messageUuid")
+        }
+        sequence ?: -1L
+    }
+
+    /** Build the standard 1:1 text payload (with self-healing reply_info). */
+    private fun textPayload(
+        contact: ContactSession,
+        text: String,
+        messageUuid: String,
+        replyToUuid: String?,
+    ): InnerPayload = InnerPayload(
+        type = "text",
+        timestamp = Clock.System.now().toString(),
+        body = text,
+        messageUuid = messageUuid,
+        replyToUuid = replyToUuid,
+        // Always include reply_info on outbound ratchet messages — costs
+        // ~150 bytes and gives self-healing display-name / server-URL
+        // updates without a separate message type. Receivers no-op when
+        // nothing changed.
+        replyInfo = ReplyInfo(
+            mailbox = contact.inboundMailboxId,
+            relayServer = relayServerUrl,
+            keyServer = keyServerUrl,
+            fingerprint = identity.fingerprint,
+            displayName = displayName,
+        ),
+    )
+
+    /**
+     * Encrypt [payload] under [contact]'s ratchet and push it to the relay.
+     * Returns the relay sequence on success, or null if the network send
+     * failed. CRITICAL (ADR 030): [encrypt] advances the sending ratchet in
+     * place; on a failed send we roll the ratchet back to its pre-encrypt
+     * snapshot so a later retry re-encrypts from the identical position —
+     * no skipped or duplicated ratchet steps. The advanced state is only
+     * persisted (persistSession) once the relay has accepted the blob.
+     */
+    private suspend fun deliverRatchet(contact: ContactSession, payload: InnerPayload): Long? {
+        // Snapshot the SENDING chain only (CKs+Ns) — what encrypt advances —
+        // so a rollback never touches receive progress (ADR 030).
+        val snapshot = contact.session.snapshotSendChain()
+        val sequence = try {
+            val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
+                .encodeToByteArray()
+            // encrypt() can throw (e.g. Bob's CKs not yet established) — keep
+            // it INSIDE the try so any failure queues the message rather than
+            // escaping past the caller's save-pending and stranding it.
+            val encrypted = contact.session.encrypt(plaintextBytes)
+            val envelope = WireEnvelope.Ratchet(
+                header = Base64Std.encode(encrypted.headerBytes),
+                ciphertext = Base64Std.encode(encrypted.ciphertext),
+            )
+            val envelopeBytes = KhordJson
+                .encodeToString(WireEnvelope.serializer(), envelope as WireEnvelope)
+                .encodeToByteArray()
+            val rs = if (contact.outboundRelayServer == relayServerUrl) {
+                rsClient
+            } else {
+                RelayServerClient(http, contact.outboundRelayServer)
+            }
+            rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
+        } catch (e: Throwable) {
+            // Send not confirmed → roll the sending chain back so a retry
+            // re-encrypts from the same position, and report failure (queue).
+            contact.session.restoreSendChain(snapshot)
+            return null
+        }
+        // The relay ACCEPTED the message — it WILL be delivered. A failure to
+        // persist the advanced ratchet now must NOT roll back (that would
+        // re-send at a consumed message number and desync the recipient).
+        // Best-effort: the next successful send persists the chain anyway.
+        try {
+            persistSession(contact)
+        } catch (e: Throwable) {
+            diagnosticLog("persistSession after accepted send failed: ${e.message}")
+        }
         return sequence
+    }
+
+    private fun diagnosticLog(message: String) {
+        org.khord.shared.diagnostic.commonDiagnosticLog("Khord", message)
     }
 
     // ── Image attachments (ADR 029) ──────────────────────────────────────────
@@ -1058,50 +1139,19 @@ class Messaging internal constructor(
         thumbnailBytes: ByteArray,
         caption: String,
         replyToUuid: String? = null,
-    ): String {
+    ): String = sendMutex.withLock {
         checkAlive()
         check(!isContactBlocked(contact.contactFingerprint)) {
             "cannot send to a blocked contact"
         }
-        val up = encryptAndUploadImage(fullImageBytes, thumbnailBytes)
+        val prep = prepareImage(fullImageBytes, thumbnailBytes)
         val timestamp = Clock.System.now().toString()
         val messageUuid = newMessageUuid()
-        val payload = InnerPayload(
-            type = "text",
-            timestamp = timestamp,
-            body = caption,
-            messageUuid = messageUuid,
-            replyToUuid = replyToUuid,
-            replyInfo = ReplyInfo(
-                mailbox = contact.inboundMailboxId,
-                relayServer = relayServerUrl,
-                keyServer = keyServerUrl,
-                fingerprint = identity.fingerprint,
-                displayName = displayName,
-            ),
-            mediaId = up.mediaId,
-            mediaKey = Base64Std.encode(up.key),
-            mediaNonce = Base64Std.encode(up.nonce),
-            mediaRelay = relayServerUrl,
-            thumbnail = Base64Std.encode(up.encryptedThumbnail),
-        )
-        val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
-            .encodeToByteArray()
-        val encrypted = contact.session.encrypt(plaintextBytes)
-        val envelope = WireEnvelope.Ratchet(
-            header = Base64Std.encode(encrypted.headerBytes),
-            ciphertext = Base64Std.encode(encrypted.ciphertext),
-        )
-        val envelopeBytes = KhordJson
-            .encodeToString(WireEnvelope.serializer(), envelope as WireEnvelope)
-            .encodeToByteArray()
-        val rs = if (contact.outboundRelayServer == relayServerUrl) {
-            rsClient
-        } else {
-            RelayServerClient(http, contact.outboundRelayServer)
-        }
-        rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
 
+        // Save pending immediately with the inline (encrypted) thumbnail, so
+        // the bubble previews instantly. mediaId is empty until the blob is
+        // uploaded; the sender views its own full image from the local cache
+        // (cachedPath, set by the caller), so the placeholder id is harmless.
         persistence.saveMessage(
             contactFingerprint = contact.contactFingerprint,
             direction = org.khord.shared.storage.MessageDirection.SENT,
@@ -1110,15 +1160,39 @@ class Messaging internal constructor(
             messageUuid = messageUuid,
             replyToUuid = replyToUuid,
             media = org.khord.shared.storage.MediaAttachment(
-                mediaId = up.mediaId,
-                mediaKey = up.key,
-                mediaNonce = up.nonce,
+                mediaId = "",
+                mediaKey = prep.key,
+                mediaNonce = prep.nonce,
                 mediaRelay = relayServerUrl,
-                thumbnail = up.encryptedThumbnail,
+                thumbnail = prep.encryptedThumbnail,
             ),
+            deliveryStatus = "pending",
         )
-        persistSession(contact)
-        return up.mediaId
+
+        val delivered = deliverImage(
+            contact, fullImageBytes, prep, caption, messageUuid, replyToUuid,
+        )
+        if (delivered) {
+            persistence.updateMessageDeliveryStatus(messageUuid, "sent")
+        } else {
+            persistence.insertOutbox(
+                org.khord.shared.storage.OutboxItem(
+                    contactFingerprint = contact.contactFingerprint,
+                    body = caption,
+                    fullImage = fullImageBytes,
+                    thumbnail = prep.encryptedThumbnail,
+                    mediaKey = prep.key,
+                    mediaNonce = prep.nonce,
+                    replyToUuid = replyToUuid,
+                    messageUuid = messageUuid,
+                    createdAt = timestamp,
+                ),
+            )
+            diagnosticLog("image queued for retry (1:1): $messageUuid")
+        }
+        // Return the message UUID (stable, always available) so the caller
+        // can key its local plaintext-image cache and set cached_path.
+        messageUuid
     }
 
     /**
@@ -1133,38 +1207,15 @@ class Messaging internal constructor(
         thumbnailBytes: ByteArray,
         caption: String,
         replyToUuid: String? = null,
-    ): String {
+    ): String = sendMutex.withLock {
         checkAlive()
         val group = persistence.loadGroup(groupId)
             ?: throw IllegalStateException("unknown groupId: $groupId")
-        val members = persistence.loadGroupMembers(groupId)
-            .filter { it.fingerprint != identity.fingerprint }
-        val up = encryptAndUploadImage(fullImageBytes, thumbnailBytes)
+        check(group.groupId == groupId)
+        val prep = prepareImage(fullImageBytes, thumbnailBytes)
         val timestamp = Clock.System.now().toString()
         val messageUuid = newMessageUuid()
-        val keyB64 = Base64Std.encode(up.key)
-        val nonceB64 = Base64Std.encode(up.nonce)
-        val thumbB64 = Base64Std.encode(up.encryptedThumbnail)
-        for (m in members) {
-            val contact = sessionForFingerprint(m.fingerprint) ?: continue
-            sendGroupInnerPayload(
-                contact = contact,
-                payload = InnerPayload(
-                    type = "group_message",
-                    timestamp = timestamp,
-                    body = caption,
-                    messageUuid = messageUuid,
-                    replyToUuid = replyToUuid,
-                    replyInfo = myReplyInfo(contact.inboundMailboxId),
-                    groupId = groupId,
-                    mediaId = up.mediaId,
-                    mediaKey = keyB64,
-                    mediaNonce = nonceB64,
-                    mediaRelay = relayServerUrl,
-                    thumbnail = thumbB64,
-                ),
-            )
-        }
+
         persistence.saveGroupMessage(
             groupId = groupId,
             senderFingerprint = identity.fingerprint,
@@ -1175,15 +1226,37 @@ class Messaging internal constructor(
             messageUuid = messageUuid,
             replyToUuid = replyToUuid,
             media = org.khord.shared.storage.MediaAttachment(
-                mediaId = up.mediaId,
-                mediaKey = up.key,
-                mediaNonce = up.nonce,
+                mediaId = "",
+                mediaKey = prep.key,
+                mediaNonce = prep.nonce,
                 mediaRelay = relayServerUrl,
-                thumbnail = up.encryptedThumbnail,
+                thumbnail = prep.encryptedThumbnail,
             ),
+            deliveryStatus = "pending",
         )
-        check(group.groupId == groupId)
-        return up.mediaId
+
+        val delivered = deliverGroupImage(
+            groupId, fullImageBytes, prep, caption, messageUuid, replyToUuid,
+        )
+        if (delivered) {
+            persistence.updateGroupMessageDeliveryStatus(messageUuid, "sent")
+        } else {
+            persistence.insertOutbox(
+                org.khord.shared.storage.OutboxItem(
+                    groupId = groupId,
+                    body = caption,
+                    fullImage = fullImageBytes,
+                    thumbnail = prep.encryptedThumbnail,
+                    mediaKey = prep.key,
+                    mediaNonce = prep.nonce,
+                    replyToUuid = replyToUuid,
+                    messageUuid = messageUuid,
+                    createdAt = timestamp,
+                ),
+            )
+            diagnosticLog("image queued for retry (group): $messageUuid")
+        }
+        messageUuid
     }
 
     /**
@@ -1232,31 +1305,153 @@ class Messaging internal constructor(
      * media id + the key/nonce/encrypted-thumbnail to embed in the payload
      * and persist locally.
      */
-    private suspend fun encryptAndUploadImage(
-        fullImageBytes: ByteArray,
-        thumbnailBytes: ByteArray,
-    ): ImageUpload {
+    /**
+     * Local, network-free prep (ADR 029/030): generate the one-time key +
+     * nonce and encrypt the thumbnail for the inline preview. Split out from
+     * the upload so the queue can persist these and the bubble can show the
+     * thumbnail before the blob is ever uploaded.
+     */
+    private suspend fun prepareImage(fullImageBytes: ByteArray, thumbnailBytes: ByteArray): ImagePrep {
         org.khord.shared.crypto.Crypto.ensureInitialized()
         val key = org.khord.shared.crypto.MediaCrypto.newKey()
-        val imageNonce = org.khord.shared.crypto.MediaCrypto.newNonce()
-        val encryptedFull = org.khord.shared.crypto.MediaCrypto.encrypt(
-            key, imageNonce, fullImageBytes,
-        )
+        val nonce = org.khord.shared.crypto.MediaCrypto.newNonce()
         val encryptedThumbnail = org.khord.shared.crypto.MediaCrypto.encrypt(
-            key, org.khord.shared.crypto.MediaCrypto.thumbnailNonce(imageNonce), thumbnailBytes,
+            key, org.khord.shared.crypto.MediaCrypto.thumbnailNonce(nonce), thumbnailBytes,
         )
-        val params = rsClient.powParams()
-        val nonce = PowMiner.mine(PowMiner.sha256Hex(encryptedFull), params.difficultyBits)
-        val mediaId = rsClient.uploadMedia(encryptedFull, nonce)
-        return ImageUpload(mediaId, key, imageNonce, encryptedThumbnail)
+        return ImagePrep(key, nonce, encryptedThumbnail)
     }
 
-    private class ImageUpload(
-        val mediaId: String,
+    /**
+     * Encrypt the full image under the prepared key/nonce, mine PoW bound to
+     * the blob, and upload to MY relay. Returns the media id, or null if the
+     * upload failed (queued for retry). Generates a fresh blob each call — a
+     * retry after a partial failure simply uploads again; the orphaned blob
+     * TTLs out on the relay.
+     */
+    private suspend fun uploadImage(fullImageBytes: ByteArray, prep: ImagePrep): String? {
+        org.khord.shared.crypto.Crypto.ensureInitialized()
+        val encryptedFull = org.khord.shared.crypto.MediaCrypto.encrypt(
+            prep.key, prep.nonce, fullImageBytes,
+        )
+        return try {
+            val params = rsClient.powParams()
+            val pow = PowMiner.mine(PowMiner.sha256Hex(encryptedFull), params.difficultyBits)
+            rsClient.uploadMedia(encryptedFull, pow)
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    private class ImagePrep(
         val key: ByteArray,
         val nonce: ByteArray,
         val encryptedThumbnail: ByteArray,
     )
+
+    /** Build a 1:1 image payload referencing an uploaded blob. */
+    private fun imagePayload(
+        contact: ContactSession,
+        caption: String,
+        messageUuid: String,
+        replyToUuid: String?,
+        mediaId: String,
+        prep: ImagePrep,
+    ): InnerPayload = InnerPayload(
+        type = "text",
+        timestamp = Clock.System.now().toString(),
+        body = caption,
+        messageUuid = messageUuid,
+        replyToUuid = replyToUuid,
+        replyInfo = ReplyInfo(
+            mailbox = contact.inboundMailboxId,
+            relayServer = relayServerUrl,
+            keyServer = keyServerUrl,
+            fingerprint = identity.fingerprint,
+            displayName = displayName,
+        ),
+        mediaId = mediaId,
+        mediaKey = Base64Std.encode(prep.key),
+        mediaNonce = Base64Std.encode(prep.nonce),
+        mediaRelay = relayServerUrl,
+        thumbnail = Base64Std.encode(prep.encryptedThumbnail),
+    )
+
+    /**
+     * Upload the blob, then ratchet-send the 1:1 image payload (with
+     * rollback on send failure, like [deliverRatchet]). Returns true iff the
+     * recipient's relay accepted the message.
+     */
+    private suspend fun deliverImage(
+        contact: ContactSession,
+        fullImageBytes: ByteArray,
+        prep: ImagePrep,
+        caption: String,
+        messageUuid: String,
+        replyToUuid: String?,
+    ): Boolean {
+        val mediaId = uploadImage(fullImageBytes, prep) ?: return false
+        val payload = imagePayload(contact, caption, messageUuid, replyToUuid, mediaId, prep)
+        return deliverRatchet(contact, payload) != null
+    }
+
+    /**
+     * Group image delivery: upload ONCE, then fan the same media id out to
+     * every reachable member. Returns true only if the upload succeeded and
+     * every reachable member's send was accepted. On a partial failure the
+     * whole item is queued and a retry re-uploads + re-fans — members who
+     * already received it may see a duplicate (per-message, not per-member,
+     * queue; documented limitation in ADR 030).
+     */
+    private suspend fun deliverGroupImage(
+        groupId: String,
+        fullImageBytes: ByteArray,
+        prep: ImagePrep,
+        caption: String,
+        messageUuid: String,
+        replyToUuid: String?,
+    ): Boolean {
+        val mediaId = uploadImage(fullImageBytes, prep) ?: return false
+        val members = persistence.loadGroupMembers(groupId)
+            .filter { it.fingerprint != identity.fingerprint }
+        var reachable = 0
+        var succeeded = 0
+        for (m in members) {
+            val contact = sessionForFingerprint(m.fingerprint) ?: continue
+            reachable++
+            val payload = InnerPayload(
+                type = "group_message",
+                timestamp = Clock.System.now().toString(),
+                body = caption,
+                messageUuid = messageUuid,
+                replyToUuid = replyToUuid,
+                replyInfo = myReplyInfo(contact.inboundMailboxId),
+                groupId = groupId,
+                mediaId = mediaId,
+                mediaKey = Base64Std.encode(prep.key),
+                mediaNonce = Base64Std.encode(prep.nonce),
+                mediaRelay = relayServerUrl,
+                thumbnail = Base64Std.encode(prep.encryptedThumbnail),
+            )
+            if (deliverRatchet(contact, payload) != null) succeeded++
+        }
+        return groupDelivered(members.size, reachable, succeeded)
+    }
+
+    /**
+     * Decide whether a group fan-out counts as delivered (ADR 030):
+     *  - truly empty group (no other members) → delivered (nothing to send).
+     *  - members exist but none reachable now → NOT delivered → queue +
+     *    retry (covers "network down" and "session not yet established").
+     *  - otherwise → delivered iff every reachable member's send was accepted.
+     * This stops a group message being marked 'sent' when nobody actually
+     * received it.
+     */
+    private fun groupDelivered(memberCount: Int, reachable: Int, succeeded: Int): Boolean =
+        when {
+            memberCount == 0 -> true
+            reachable == 0 -> false
+            else -> succeeded == reachable
+        }
 
     /** Rebuild a [MediaAttachment] from an inbound payload's media_* fields. */
     private fun mediaFromPayload(payload: InnerPayload): org.khord.shared.storage.MediaAttachment? {
@@ -1499,13 +1694,12 @@ class Messaging internal constructor(
         groupId: String,
         text: String,
         replyToUuid: String? = null,
-    ) {
+    ): Unit = sendMutex.withLock {
         checkAlive()
         require(text.isNotBlank()) { "text must be non-blank" }
         val group = persistence.loadGroup(groupId)
             ?: throw IllegalStateException("unknown groupId: $groupId")
-        val members = persistence.loadGroupMembers(groupId)
-            .filter { it.fingerprint != identity.fingerprint }
+        check(group.groupId == groupId)
 
         val timestamp = Clock.System.now().toString()
         // Single UUID stamped on every fan-out copy — receiving members
@@ -1513,22 +1707,8 @@ class Messaging internal constructor(
         // (referencing this UUID) can be applied uniformly across all
         // recipients.
         val messageUuid = newMessageUuid()
-        for (m in members) {
-            val contact = sessionForFingerprint(m.fingerprint) ?: continue
-            sendGroupInnerPayload(
-                contact = contact,
-                payload = InnerPayload(
-                    type = "group_message",
-                    timestamp = timestamp,
-                    body = text,
-                    messageUuid = messageUuid,
-                    replyToUuid = replyToUuid,
-                    replyInfo = myReplyInfo(contact.inboundMailboxId),
-                    groupId = groupId,
-                ),
-            )
-        }
 
+        // ADR 030: save pending first, then fan out.
         persistence.saveGroupMessage(
             groupId = groupId,
             senderFingerprint = identity.fingerprint,
@@ -1538,10 +1718,172 @@ class Messaging internal constructor(
             direction = org.khord.shared.storage.MessageDirection.SENT,
             messageUuid = messageUuid,
             replyToUuid = replyToUuid,
+            deliveryStatus = "pending",
         )
-        // Read-mod-write: groupName access not needed here, but keep
-        // `group` local in case future logic on this branch needs it.
-        check(group.groupId == groupId)
+
+        if (deliverGroupText(groupId, text, messageUuid, replyToUuid)) {
+            persistence.updateGroupMessageDeliveryStatus(messageUuid, "sent")
+        } else {
+            persistence.insertOutbox(
+                org.khord.shared.storage.OutboxItem(
+                    groupId = groupId,
+                    body = text,
+                    replyToUuid = replyToUuid,
+                    messageUuid = messageUuid,
+                    createdAt = timestamp,
+                ),
+            )
+            diagnosticLog("message queued for retry (group): $messageUuid")
+        }
+    }
+
+    /**
+     * Fan a group text message out to every reachable member via their
+     * pairwise ratchet (with rollback on send failure). Returns true only if
+     * every reachable member's send was accepted. See [deliverGroupImage]
+     * for the partial-failure / duplicate caveat.
+     */
+    private suspend fun deliverGroupText(
+        groupId: String,
+        text: String,
+        messageUuid: String,
+        replyToUuid: String?,
+    ): Boolean {
+        val members = persistence.loadGroupMembers(groupId)
+            .filter { it.fingerprint != identity.fingerprint }
+        var reachable = 0
+        var succeeded = 0
+        for (m in members) {
+            val contact = sessionForFingerprint(m.fingerprint) ?: continue
+            reachable++
+            val payload = InnerPayload(
+                type = "group_message",
+                timestamp = Clock.System.now().toString(),
+                body = text,
+                messageUuid = messageUuid,
+                replyToUuid = replyToUuid,
+                replyInfo = myReplyInfo(contact.inboundMailboxId),
+                groupId = groupId,
+            )
+            if (deliverRatchet(contact, payload) != null) succeeded++
+        }
+        return groupDelivered(members.size, reachable, succeeded)
+    }
+
+    // ── Offline outbox drain (ADR 030, #59) ─────────────────────────────────
+
+    /**
+     * Attempt to deliver every queued message, oldest first. Safe to call
+     * from any drain trigger (connectivity, app launch, chat open, push
+     * reconnect) — a [tryLock] guard means a second concurrent drain is a
+     * no-op rather than double-sending. Each item is independent: a failure
+     * increments its attempt counter and moves on (some recipients may be
+     * reachable when others aren't). At [MAX_OUTBOX_ATTEMPTS] an item is
+     * marked permanently failed and surfaced in the UI for manual retry.
+     */
+    suspend fun drainOutbox() = drainOutbox(wait = false)
+
+    /**
+     * @param wait when false (the background triggers), a drain already in
+     *   flight makes this a no-op (tryLock) — avoids piling up redundant
+     *   drains. When true (manual Retry), WAIT for the lock so the just-reset
+     *   item is actually re-attempted now rather than swallowed by a
+     *   concurrent drain whose item snapshot predates the reset.
+     */
+    private suspend fun drainOutbox(wait: Boolean) {
+        if (panicked) return
+        if (wait) sendMutex.lock() else if (!sendMutex.tryLock()) return
+        try {
+            for (item in persistence.loadOutbox()) {
+                if (panicked) break
+                if (item.status == "failed") continue
+                // Blocked contact: hold the item (user may unblock) — skip.
+                val fp = item.contactFingerprint
+                if (fp != null && isContactBlocked(fp)) continue
+                // 1:1 target gone (contact deleted): can never deliver. Drop
+                // the queue row + mark the message failed. (deleteContact
+                // also clears the queue, so this is a belt-and-braces guard.)
+                if (fp != null && sessionForFingerprint(fp) == null) {
+                    persistence.deleteOutboxItem(item.id)
+                    persistence.updateMessageDeliveryStatus(item.messageUuid, "failed")
+                    continue
+                }
+                if (item.attempts >= MAX_OUTBOX_ATTEMPTS) {
+                    persistence.updateOutboxStatus(item.id, "failed", "Max retries exceeded")
+                    markDeliveryFailed(item)
+                    continue
+                }
+                persistence.updateOutboxStatus(item.id, "sending", null)
+                val ok = try {
+                    retryItem(item)
+                } catch (e: Throwable) {
+                    diagnosticLog("outbox retry threw for ${item.messageUuid}: ${e.message}")
+                    false
+                }
+                if (ok) {
+                    persistence.deleteOutboxItem(item.id)
+                    markDeliverySent(item)
+                } else {
+                    persistence.incrementOutboxAttempts(item.id)
+                    persistence.updateOutboxStatus(item.id, "pending", "delivery failed")
+                    diagnosticLog("outbox retry failed for ${item.messageUuid}")
+                }
+            }
+        } finally {
+            sendMutex.unlock()
+        }
+    }
+
+    /** Dispatch a queued item to the right retry path. Encrypt-at-delivery. */
+    private suspend fun retryItem(item: org.khord.shared.storage.OutboxItem): Boolean = when {
+        item.fullImage != null -> {
+            val prep = ImagePrep(item.mediaKey!!, item.mediaNonce!!, item.thumbnail!!)
+            if (item.groupId != null) {
+                deliverGroupImage(item.groupId, item.fullImage, prep, item.body, item.messageUuid, item.replyToUuid)
+            } else {
+                val contact = sessionForFingerprint(item.contactFingerprint!!) ?: return false
+                deliverImage(contact, item.fullImage, prep, item.body, item.messageUuid, item.replyToUuid)
+            }
+        }
+        item.groupId != null ->
+            deliverGroupText(item.groupId, item.body, item.messageUuid, item.replyToUuid)
+        item.contactFingerprint != null -> {
+            val contact = sessionForFingerprint(item.contactFingerprint) ?: return false
+            deliverRatchet(contact, textPayload(contact, item.body, item.messageUuid, item.replyToUuid)) != null
+        }
+        else -> false
+    }
+
+    private suspend fun markDeliverySent(item: org.khord.shared.storage.OutboxItem) {
+        if (item.groupId != null) persistence.updateGroupMessageDeliveryStatus(item.messageUuid, "sent")
+        else persistence.updateMessageDeliveryStatus(item.messageUuid, "sent")
+    }
+
+    private suspend fun markDeliveryFailed(item: org.khord.shared.storage.OutboxItem) {
+        if (item.groupId != null) persistence.updateGroupMessageDeliveryStatus(item.messageUuid, "failed")
+        else persistence.updateMessageDeliveryStatus(item.messageUuid, "failed")
+    }
+
+    /**
+     * Manual "Retry" on a failed message (ADR 030): reset its attempt
+     * counter, flip the bubble back to pending, and kick a drain.
+     */
+    suspend fun retryFailedMessage(messageUuid: String, isGroup: Boolean) {
+        checkAlive()
+        persistence.resetOutboxByUuid(messageUuid)
+        if (isGroup) persistence.updateGroupMessageDeliveryStatus(messageUuid, "pending")
+        else persistence.updateMessageDeliveryStatus(messageUuid, "pending")
+        // wait=true: don't let a concurrent background drain swallow this —
+        // the user explicitly asked to retry now (ADR 030, #8/#9).
+        drainOutbox(wait = true)
+    }
+
+    /** Manual "Delete" on a failed message: drop the queue row + the bubble. */
+    suspend fun deleteFailedMessage(messageUuid: String, isGroup: Boolean) {
+        checkAlive()
+        persistence.deleteOutboxByUuid(messageUuid)
+        if (isGroup) persistence.deleteGroupMessageByUuid(messageUuid)
+        else persistence.deleteMessageByUuid(messageUuid)
     }
 
     /**
@@ -1703,7 +2045,9 @@ class Messaging internal constructor(
     private suspend fun sendGroupInnerPayload(
         contact: ContactSession,
         payload: InnerPayload,
-    ): Long {
+    ): Long = sendMutex.withLock {
+        // Takes sendMutex for the same reason as sendRatchetPayload — serialise
+        // this encrypt against drainOutbox/queue sends on the shared ratchet.
         val plaintextBytes = KhordJson.encodeToString(InnerPayload.serializer(), payload)
             .encodeToByteArray()
         val encrypted = contact.session.encrypt(plaintextBytes)
@@ -1721,7 +2065,7 @@ class Messaging internal constructor(
         }
         val sequence = rs.sendMessage(contact.outboundMailboxId, envelopeBytes)
         persistSession(contact)
-        return sequence
+        sequence
     }
 
     /**
@@ -2211,6 +2555,7 @@ class Messaging internal constructor(
                 edited = it.edited,
                 replyToUuid = it.replyToUuid,
                 media = it.media?.toEntry(),
+                deliveryStatus = it.deliveryStatus,
             )
         }
     }
@@ -2223,6 +2568,11 @@ class Messaging internal constructor(
     suspend fun panic() {
         if (panicked) return
         panicked = true
+        // 0. Explicitly wipe the outbox of any unsent plaintext (ADR 030)
+        //    BEFORE the file-level wipe — leaving queued plaintext after a
+        //    panic would defeat the purpose. (persistence.panic() also wipes
+        //    it via the file delete, but be explicit + defensive.)
+        try { persistence.clearOutbox() } catch (_: Throwable) { /* file wipe below covers it */ }
         // 1. Wipe persisted state + delete DB file (DbPersistence) / clear caches.
         try { persistence.panic() } catch (_: Throwable) { /* still wipe RAM */ }
         // 2. Wipe in-memory secrets.
@@ -2275,6 +2625,13 @@ class Messaging internal constructor(
         sessionsByInboundMailbox[mailboxId]
 
     companion object {
+        /**
+         * Cap on outbox delivery attempts (ADR 030). After this many failed
+         * tries an item is marked permanently 'failed' and surfaced for
+         * manual retry rather than retried forever.
+         */
+        const val MAX_OUTBOX_ATTEMPTS = 10L
+
         /**
          * Body inserted into the local message history when an inbound
          * X3DH initial forces a session reset (seed-phrase recovery or
@@ -2416,6 +2773,12 @@ data class MessageEntry(
      * optional caption.
      */
     val media: MediaEntry? = null,
+    /**
+     * Outbound delivery state (ADR 030): 'pending' (queued / in flight),
+     * 'sent' (relay accepted), 'failed' (gave up). Null on received messages
+     * and on pre-ADR-030 history — both render with no indicator.
+     */
+    val deliveryStatus: String? = null,
 ) {
     enum class Direction { SENT, RECEIVED }
 }
@@ -2467,6 +2830,8 @@ data class GroupMessageEntry(
     val replyToUuid: String? = null,
     /** Image attachment (ADR 029), or null for a plain text message. */
     val media: MediaEntry? = null,
+    /** Outbound delivery state (ADR 030); null on received / pre-030 rows. */
+    val deliveryStatus: String? = null,
 )
 
 /**
@@ -2507,6 +2872,7 @@ internal fun org.khord.shared.storage.GroupMessageRecord.toEntry(): GroupMessage
         edited = edited,
         replyToUuid = replyToUuid,
         media = media?.toEntry(),
+        deliveryStatus = deliveryStatus,
     )
 
 internal fun org.khord.shared.storage.MediaAttachment.toEntry(): MediaEntry =

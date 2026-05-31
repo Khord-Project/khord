@@ -30,7 +30,9 @@ CREATE TABLE group_message (
     media_nonce           BLOB,
     media_relay           TEXT,
     thumbnail             BLOB,
-    media_cached_path     TEXT
+    media_cached_path     TEXT,
+    -- Outbound delivery state (ADR 030). See message.delivery_status.
+    delivery_status       TEXT
 );
 
 CREATE INDEX group_message_by_group ON group_message(group_id, id);
@@ -40,15 +42,21 @@ insertGroupMessage:
 INSERT INTO group_message(
     group_id, sender_fingerprint, sender_display_name,
     body, timestamp, direction, stored_at, message_uuid, reply_to_uuid,
-    media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path,
+    delivery_status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectGroupMessages:
 SELECT id, sender_fingerprint, sender_display_name, body, timestamp, direction, stored_at, message_uuid, edited, reply_to_uuid,
-       media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path
+       media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path,
+       delivery_status
   FROM group_message
  WHERE group_id = ?
  ORDER BY id ASC;
+
+-- Update outbound delivery state by sender-issued UUID (ADR 030).
+updateGroupMessageDeliveryStatus:
+UPDATE group_message SET delivery_status = ? WHERE message_uuid = ?;
 
 -- See Message.sq.updateMessageMediaCachedPath.
 updateGroupMessageMediaCachedPath:
@@ -64,6 +72,9 @@ updateGroupMessageBodyByUuid:
 UPDATE group_message
    SET body = ?, edited = 1
  WHERE message_uuid = ?;
+
+deleteGroupMessageByUuid:
+DELETE FROM group_message WHERE message_uuid = ?;
 
 deleteGroupMessages:
 DELETE FROM group_message WHERE group_id = ?;

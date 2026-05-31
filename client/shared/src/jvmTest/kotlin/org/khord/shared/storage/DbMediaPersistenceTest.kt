@@ -160,4 +160,68 @@ class DbMediaPersistenceTest {
         assertTrue(KhordDatabase.Schema.version >= 12, "schema version did not advance to 12")
         driver.close()
     }
+
+    /**
+     * Offline queue (ADR 030): a v12 DB migrates to v13 by adding
+     * delivery_status to both message tables and creating the outbox. If
+     * 12.sqm didn't run, the post-migration inserts below throw — the same
+     * failure that would break sending on an upgraded install.
+     */
+    @Test
+    fun migration_12_to_13_adds_delivery_status_and_outbox() {
+        val dbPath = Path(tempDir.absolutePath, "migrate13-${System.nanoTime()}.db").absolutePathString()
+        val driver = JdbcSqliteDriver("jdbc:sqlite:$dbPath")
+
+        // v12 message shape (post-media, pre-delivery_status).
+        driver.execute(null, """
+            CREATE TABLE message (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                contact_fingerprint TEXT NOT NULL, direction TEXT NOT NULL,
+                body TEXT NOT NULL, timestamp TEXT NOT NULL, stored_at TEXT NOT NULL,
+                message_uuid TEXT, edited INTEGER NOT NULL DEFAULT 0, reply_to_uuid TEXT,
+                media_id TEXT, media_key BLOB, media_nonce BLOB, media_relay TEXT,
+                thumbnail BLOB, media_cached_path TEXT
+            );
+        """.trimIndent(), 0)
+        driver.execute(null, """
+            CREATE TABLE group_message (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT NOT NULL, sender_fingerprint TEXT NOT NULL,
+                sender_display_name TEXT NOT NULL DEFAULT '', body TEXT NOT NULL,
+                timestamp TEXT NOT NULL, direction TEXT NOT NULL, stored_at TEXT NOT NULL,
+                message_uuid TEXT, edited INTEGER NOT NULL DEFAULT 0, reply_to_uuid TEXT,
+                media_id TEXT, media_key BLOB, media_nonce BLOB, media_relay TEXT,
+                thumbnail BLOB, media_cached_path TEXT
+            );
+        """.trimIndent(), 0)
+
+        KhordDatabase.Schema.migrate(driver, 12, 13)
+
+        // delivery_status now exists on both tables.
+        driver.execute(null, """
+            INSERT INTO message(contact_fingerprint, direction, body, timestamp, stored_at, delivery_status)
+            VALUES ('fp','sent','hi','t','t','pending');
+        """.trimIndent(), 0)
+        // The outbox table now exists and accepts a row.
+        driver.execute(null, """
+            INSERT INTO outbox(body, message_uuid, created_at) VALUES ('queued','u1','t');
+        """.trimIndent(), 0)
+
+        var status: String? = null
+        driver.executeQuery(null, "SELECT delivery_status FROM message LIMIT 1;", { c ->
+            if (c.next().value) status = c.getString(0)
+            app.cash.sqldelight.db.QueryResult.Unit
+        }, 0)
+        assertEquals("pending", status)
+
+        var queued = 0L
+        driver.executeQuery(null, "SELECT COUNT(*) FROM outbox;", { c ->
+            if (c.next().value) queued = c.getLong(0) ?: 0
+            app.cash.sqldelight.db.QueryResult.Unit
+        }, 0)
+        assertEquals(1L, queued)
+
+        assertTrue(KhordDatabase.Schema.version >= 13, "schema version did not advance to 13")
+        driver.close()
+    }
 }

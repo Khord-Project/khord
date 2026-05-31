@@ -163,11 +163,18 @@ internal interface Persistence {
         messageUuid: String? = null,
         replyToUuid: String? = null,
         media: MediaAttachment? = null,
+        deliveryStatus: String? = null,
     )
     suspend fun loadMessages(contactFingerprint: String): List<StoredMessage>
 
     /** Set the local cache path on a 1:1 message after its full image is fetched (ADR 029). */
     suspend fun setMessageMediaCachedPath(messageId: Long, cachedPath: String)
+
+    /**
+     * Update the outbound delivery state ('pending'/'sent'/'failed') of a
+     * 1:1 message by its UUID (ADR 030). No-op if the UUID is unknown.
+     */
+    suspend fun updateMessageDeliveryStatus(messageUuid: String, status: String)
 
     /**
      * Look up a 1:1 message by its UUID. Returns null if no row matches
@@ -232,12 +239,54 @@ internal interface Persistence {
         messageUuid: String? = null,
         replyToUuid: String? = null,
         media: MediaAttachment? = null,
+        deliveryStatus: String? = null,
     )
 
     suspend fun loadGroupMessages(groupId: String): List<GroupMessageRecord>
 
     /** Group equivalent of [setMessageMediaCachedPath] (ADR 029). */
     suspend fun setGroupMessageMediaCachedPath(messageId: Long, cachedPath: String)
+
+    /** Group equivalent of [updateMessageDeliveryStatus] (ADR 030). */
+    suspend fun updateGroupMessageDeliveryStatus(messageUuid: String, status: String)
+
+    // ── Outbox / offline queue (ADR 030, #59) ───────────────────────────────
+
+    /** Enqueue a message that couldn't be delivered, for later retry. */
+    suspend fun insertOutbox(item: OutboxItem)
+
+    /** All queued items, oldest first (created_at ASC) — drain order. */
+    suspend fun loadOutbox(): List<OutboxItem>
+
+    /** Set an item's status ('pending'/'sending'/'failed') + last error. */
+    suspend fun updateOutboxStatus(id: Long, status: String, error: String?)
+
+    /** Bump the retry counter after a failed attempt. */
+    suspend fun incrementOutboxAttempts(id: Long)
+
+    /** Remove a delivered item from the queue. */
+    suspend fun deleteOutboxItem(id: Long)
+
+    /** Drop every queued item for a contact (called on contact deletion). */
+    suspend fun deleteOutboxForContact(contactFingerprint: String)
+
+    /** Drop every queued item for a group (called on group deletion). */
+    suspend fun deleteOutboxForGroup(groupId: String)
+
+    /** Reset a failed item (attempts=0, status=pending) so a drain retries it. */
+    suspend fun resetOutboxByUuid(messageUuid: String)
+
+    /** Drop a queued item by its message UUID (manual "Delete"). */
+    suspend fun deleteOutboxByUuid(messageUuid: String)
+
+    /** Delete a 1:1 message row by UUID (manual delete of a failed message). */
+    suspend fun deleteMessageByUuid(messageUuid: String)
+
+    /** Delete a group message row by UUID (manual delete of a failed message). */
+    suspend fun deleteGroupMessageByUuid(messageUuid: String)
+
+    /** Wipe the whole queue — part of [panic]. */
+    suspend fun clearOutbox()
 
     /**
      * Full-text search (FTS5) across all 1:1 + group message bodies
@@ -425,6 +474,33 @@ internal data class StoredMessage(
     val replyToUuid: String? = null,
     /** Image attachment (ADR 029), or null for a plain text message. */
     val media: MediaAttachment? = null,
+    /** Outbound delivery state 'pending'/'sent'/'failed' (ADR 030); null on received. */
+    val deliveryStatus: String? = null,
+)
+
+/**
+ * A queued outbound message awaiting (re)delivery (ADR 030, #59). Stores
+ * PLAINTEXT — encryption happens at delivery time in [drainOutbox] so the
+ * ratchet advances in real send order. Exactly one of [contactFingerprint]
+ * (1:1) / [groupId] (group) is non-null. Image fields are null for text;
+ * [fullImage] + [thumbnail] are the already-processed bytes and [mediaKey]
+ * / [mediaNonce] the per-image one-time key reused across retries.
+ */
+internal data class OutboxItem(
+    val id: Long = 0,
+    val contactFingerprint: String? = null,
+    val groupId: String? = null,
+    val body: String,
+    val fullImage: ByteArray? = null,
+    val thumbnail: ByteArray? = null,
+    val mediaKey: ByteArray? = null,
+    val mediaNonce: ByteArray? = null,
+    val replyToUuid: String? = null,
+    val messageUuid: String,
+    val createdAt: String,
+    val attempts: Long = 0,
+    val lastError: String? = null,
+    val status: String = "pending",
 )
 
 /**
@@ -472,6 +548,8 @@ internal data class GroupMessageRecord(
     val replyToUuid: String? = null,
     /** Image attachment (ADR 029), or null for a plain text message. */
     val media: MediaAttachment? = null,
+    /** Outbound delivery state 'pending'/'sent'/'failed' (ADR 030); null on received. */
+    val deliveryStatus: String? = null,
 )
 
 /**

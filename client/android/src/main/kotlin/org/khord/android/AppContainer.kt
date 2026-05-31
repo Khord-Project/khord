@@ -5,6 +5,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -307,6 +308,16 @@ object AppContainer {
         bootstrap = b
         messaging = b.messaging
         bootstrapRegeneratedKeystore = ks.lastLoadRegeneratedKey
+
+        // ADR 030: flush any messages queued in a previous session as soon
+        // as we're back up. Fire-and-forget on the app scope so it doesn't
+        // delay the splash → UI handoff. (The push service also drains on
+        // WS (re)connect; this covers the cold-start window before that.)
+        b.messaging?.let { m ->
+            applicationScope.launch(Dispatchers.IO) {
+                runCatching { m.drainOutbox() }
+            }
+        }
         return b.messaging != null
     }
 

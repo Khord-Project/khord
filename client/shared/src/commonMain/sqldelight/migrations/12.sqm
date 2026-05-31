@@ -1,0 +1,34 @@
+-- Migration from schema version 12 to 13.
+--
+-- Offline message queue (ADR 030, #59). Adds the `outbox` table and a
+-- nullable `delivery_status` column to both message tables.
+--
+-- delivery_status is NULL on existing rows (and on all received messages);
+-- only sent messages composed under ADR 030+ carry 'pending' / 'sent' /
+-- 'failed'. NULL renders exactly like the old behaviour (no indicator), so
+-- pre-migration history is unaffected.
+--
+-- The outbox columns mirror Outbox.sq — see that file for rationale on the
+-- BLOB image storage and encrypt-at-delivery model.
+
+ALTER TABLE message ADD COLUMN delivery_status TEXT;
+ALTER TABLE group_message ADD COLUMN delivery_status TEXT;
+
+CREATE TABLE outbox (
+    id                  INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    contact_fingerprint TEXT,
+    group_id            TEXT,
+    body                TEXT    NOT NULL,
+    full_image          BLOB,
+    thumbnail           BLOB,
+    media_key           BLOB,
+    media_nonce         BLOB,
+    reply_to_uuid       TEXT,
+    message_uuid        TEXT    NOT NULL,
+    created_at          TEXT    NOT NULL,
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    last_error          TEXT,
+    status              TEXT    NOT NULL DEFAULT 'pending'
+);
+
+CREATE INDEX outbox_by_created ON outbox(created_at, id);

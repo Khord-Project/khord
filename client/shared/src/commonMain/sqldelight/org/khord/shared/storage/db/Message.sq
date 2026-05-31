@@ -33,7 +33,14 @@ CREATE TABLE message (
     media_nonce         BLOB,
     media_relay         TEXT,
     thumbnail           BLOB,
-    media_cached_path   TEXT
+    media_cached_path   TEXT,
+    -- Outbound delivery state (ADR 030). Nullable: NULL on received
+    -- messages (delivery status is a sender-only concept) and on
+    -- pre-ADR-030 rows. For sent messages: 'pending' (queued / in
+    -- flight, an outbox row exists), 'sent' (relay accepted it), or
+    -- 'failed' (gave up after the retry cap). Drives the per-bubble
+    -- status indicator.
+    delivery_status     TEXT
 );
 
 CREATE INDEX message_by_contact ON message(contact_fingerprint, id);
@@ -43,15 +50,21 @@ insertMessage:
 INSERT INTO message(
     contact_fingerprint, direction, body, timestamp, stored_at,
     message_uuid, reply_to_uuid,
-    media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path,
+    delivery_status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectMessagesByContact:
 SELECT id, direction, body, timestamp, stored_at, message_uuid, edited, reply_to_uuid,
-       media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path
+       media_id, media_key, media_nonce, media_relay, thumbnail, media_cached_path,
+       delivery_status
   FROM message
  WHERE contact_fingerprint = ?
  ORDER BY id ASC;
+
+-- Update outbound delivery state by sender-issued UUID (ADR 030).
+updateMessageDeliveryStatus:
+UPDATE message SET delivery_status = ? WHERE message_uuid = ?;
 
 -- Set the local cache path after a full image has been downloaded +
 -- decrypted to private storage (ADR 029). Targets by row id.
@@ -68,6 +81,9 @@ updateMessageBodyByUuid:
 UPDATE message
    SET body = ?, edited = 1
  WHERE message_uuid = ?;
+
+deleteMessageByUuid:
+DELETE FROM message WHERE message_uuid = ?;
 
 deleteMessagesForContact:
 DELETE FROM message WHERE contact_fingerprint = ?;
