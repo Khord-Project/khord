@@ -150,31 +150,56 @@ class GroupChatViewModel(
         }
     }
 
-    /** Send an image to the group (ADR 029). See [ChatViewModel.sendImage]. */
-    fun sendImage(context: Context, uri: Uri, caption: String) {
+    /** Send one or more images to the group, each as its own message (ADR 029). */
+    fun sendImages(context: Context, uris: List<Uri>, caption: String) {
         val appContext = context.applicationContext
         viewModelScope.launch(Dispatchers.IO) {
             mutex.withLock {
                 _state.update { it.copy(sending = true, error = null) }
-                runCatching {
-                    val messaging = AppContainer.messaging ?: error("not initialised")
-                    val processed = ImageProcessor.process(appContext, uri)
-                    val messageUuid = messaging.sendGroupImageMessage(
-                        groupId = groupId,
-                        fullImageBytes = processed.full,
-                        thumbnailBytes = processed.thumbnail,
-                        caption = caption.trim(),
-                    )
-                    val path = MediaCache.write(appContext, messageUuid, processed.full)
-                    messaging.groupMessageHistory(groupId)
-                        .firstOrNull { it.messageUuid == messageUuid }
-                        ?.let { messaging.setGroupMessageImageCached(it.id, path) }
-                    reloadLockedInternal()
-                }.onFailure { e ->
-                    _state.update {
-                        it.copy(error = e.message ?: e::class.simpleName, errorCause = e)
+                for (uri in uris) {
+                    runCatching {
+                        val messaging = AppContainer.messaging ?: error("not initialised")
+                        val processed = ImageProcessor.process(appContext, uri)
+                        val messageUuid = messaging.sendGroupImageMessage(
+                            groupId = groupId,
+                            fullImageBytes = processed.full,
+                            thumbnailBytes = processed.thumbnail,
+                            caption = caption.trim(),
+                        )
+                        val path = MediaCache.write(appContext, messageUuid, processed.full)
+                        messaging.groupMessageHistory(groupId)
+                            .firstOrNull { it.messageUuid == messageUuid }
+                            ?.let { messaging.setGroupMessageImageCached(it.id, path) }
+                    }.onFailure { e ->
+                        _state.update {
+                            it.copy(error = e.message ?: e::class.simpleName, errorCause = e)
+                        }
                     }
                 }
+                reloadLockedInternal()
+                _state.update { it.copy(sending = false) }
+            }
+        }
+    }
+
+    /** Convert each image to ASCII art and send as plain text (feat/ascii-art-send). */
+    fun sendAsciiImages(context: Context, uris: List<Uri>) {
+        val appContext = context.applicationContext
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                _state.update { it.copy(sending = true, error = null) }
+                for (uri in uris) {
+                    runCatching {
+                        val messaging = AppContainer.messaging ?: error("not initialised")
+                        val ascii = org.khord.android.media.ImageToAscii.fromUri(appContext, uri)
+                        messaging.sendGroupMessage(groupId, ascii)
+                    }.onFailure { e ->
+                        _state.update {
+                            it.copy(error = e.message ?: e::class.simpleName, errorCause = e)
+                        }
+                    }
+                }
+                reloadLockedInternal()
                 _state.update { it.copy(sending = false) }
             }
         }

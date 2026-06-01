@@ -18,8 +18,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -183,44 +186,46 @@ fun ImageBubble(
     }
 }
 
+/**
+ * Preview + send sheet for one or more picked images (feat/ascii-art-send).
+ * Shows a horizontal strip of the selection and two send actions whose
+ * primacy follows the user's [asciiDefault] preference:
+ *   - default off: primary "Send" (as encrypted images), secondary "as ASCII"
+ *   - default on:  primary "Send" (as ASCII text), secondary "as image"
+ * Each selected image is sent as its own message. [onSend]'s `asAscii` says
+ * which mode was chosen; `caption` applies to image sends (ASCII messages
+ * are just the art).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImagePreviewSheet(
-    uri: Uri,
+    uris: List<Uri>,
     sending: Boolean,
+    asciiDefault: Boolean,
     onCancel: () -> Unit,
-    onSend: (caption: String) -> Unit,
+    onSend: (uris: List<Uri>, caption: String, asAscii: Boolean) -> Unit,
 ) {
-    val context = LocalContext.current
     var caption by remember { mutableStateOf("") }
+    val count = uris.size
     ModalBottomSheet(onDismissRequest = onCancel) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
-            val preview by produceState<ImageBitmap?>(null, uri) {
-                value = withContext(Dispatchers.IO) {
-                    runCatching {
-                        context.contentResolver.openInputStream(uri)?.use {
-                            BitmapFactory.decodeStream(it)?.asImageBitmap()
-                        }
-                    }.getOrNull()
-                }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(uris) { uri -> PreviewThumb(uri) }
             }
-            preview?.let {
-                Image(
-                    bitmap = it,
-                    contentDescription = "Selected image",
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
-                    contentScale = ContentScale.Fit,
+            Spacer(Modifier.height(12.dp))
+            // Caption is for image sends; ASCII messages are the art itself.
+            if (!asciiDefault) {
+                OutlinedTextField(
+                    value = caption,
+                    onValueChange = { caption = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Add a caption (optional)") },
+                    singleLine = false,
                 )
+                Spacer(Modifier.height(12.dp))
             }
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = caption,
-                onValueChange = { caption = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Add a caption (optional)") },
-                singleLine = false,
-            )
-            Spacer(Modifier.height(12.dp))
+            val primaryLabel = if (count > 1) "Send all ($count)" else "Send"
+            val secondaryLabel = if (asciiDefault) "Send as image" else "Send as ASCII"
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
@@ -228,11 +233,46 @@ fun ImagePreviewSheet(
             ) {
                 TextButton(onClick = onCancel, enabled = !sending) { Text("Cancel") }
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = { onSend(caption) }, enabled = !sending) {
-                    Text(if (sending) "Sending…" else "Send")
-                }
+                // Secondary = the non-default mode.
+                TextButton(
+                    onClick = { onSend(uris, caption, !asciiDefault) },
+                    enabled = !sending,
+                ) { Text(secondaryLabel) }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = { onSend(uris, caption, asciiDefault) },
+                    enabled = !sending,
+                ) { Text(if (sending) "Sending…" else primaryLabel) }
             }
             Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun PreviewThumb(uri: Uri) {
+    val context = LocalContext.current
+    val bmp by produceState<ImageBitmap?>(null, uri) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it)?.asImageBitmap()
+                }
+            }.getOrNull()
+        }
+    }
+    Box(
+        modifier = Modifier.size(140.dp).clip(RoundedCornerShape(8.dp))
+            .background(Color.Black.copy(alpha = 0.1f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        bmp?.let {
+            Image(
+                bitmap = it,
+                contentDescription = "Selected image",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
         }
     }
 }

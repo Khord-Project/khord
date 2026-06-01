@@ -136,6 +136,10 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = viewModel()) {
 
                 Spacer(Modifier.height(16.dp))
 
+                ImageSendSection()
+
+                Spacer(Modifier.height(16.dp))
+
                 Text(
                     "Panic — wipes everything on this device: identity, contacts, " +
                         "messages, ratchet state. Cannot be undone. Your seed phrase " +
@@ -297,6 +301,47 @@ private fun XiaomiBatteryWarningCard() {
                     "Autostart under Settings → Apps → Manage apps → Khord.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ImageSendSection() {
+    val context = LocalContext.current
+    var asciiDefault by remember {
+        mutableStateOf(
+            org.khord.android.media.ImageSendMode.load(context) ==
+                org.khord.android.media.ImageSendMode.ASCII,
+        )
+    }
+    Column {
+        Text("Images", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Send images as ASCII art", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Convert photos to text art instead of uploading them — no media " +
+                        "blob ever leaves your device. You can still override per image.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            androidx.compose.material3.Switch(
+                checked = asciiDefault,
+                onCheckedChange = {
+                    asciiDefault = it
+                    org.khord.android.media.ImageSendMode.save(
+                        context,
+                        if (it) org.khord.android.media.ImageSendMode.ASCII
+                        else org.khord.android.media.ImageSendMode.IMAGE,
+                    )
+                },
             )
         }
     }

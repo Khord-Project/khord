@@ -9,6 +9,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -38,11 +40,13 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.khord.android.ui.theme.LocalKhordChatColors
 
 /**
@@ -101,10 +105,14 @@ fun MessageBubble(
     var menuOpen by remember { mutableStateOf(false) }
     val canEdit = isSent && messageUuid != null && onEdit != null
     val canReply = messageUuid != null && onReply != null
+    // ASCII-art messages (feat/ascii-art-send) render in a wider, monospace
+    // bubble so the fixed-width lines line up. Detected from the body — see
+    // [looksLikeAsciiArt]; no payload flag / schema change needed.
+    val asciiArt = remember(body) { looksLikeAsciiArt(body) }
 
     Box(
         modifier = modifier
-            .widthIn(max = 280.dp)
+            .widthIn(max = if (asciiArt) 340.dp else 280.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(bg)
             .combinedClickable(
@@ -120,11 +128,26 @@ fun MessageBubble(
                 QuoteBlock(quoted, fg, onQuotedTap)
                 Spacer(Modifier.height(4.dp))
             }
-            Text(
-                text = remember(body, fg) { linkify(body, fg) },
-                style = MaterialTheme.typography.bodyMedium,
-                color = fg,
-            )
+            if (asciiArt) {
+                // Fixed-width font + no wrap so the art keeps its shape;
+                // horizontal scroll lets wide art (70 cols) overflow
+                // gracefully instead of wrapping and scrambling.
+                Text(
+                    text = body,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 6.sp,
+                    lineHeight = 7.sp,
+                    color = fg,
+                    softWrap = false,
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                )
+            } else {
+                Text(
+                    text = remember(body, fg) { linkify(body, fg) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = fg,
+                )
+            }
         }
         DropdownMenu(
             expanded = menuOpen,
@@ -206,6 +229,28 @@ private fun QuoteBlock(
             )
         }
     }
+}
+
+/**
+ * Heuristic: does this message body look like generated ASCII art
+ * (feat/ascii-art-send)? Our converter emits a block of fixed-width lines
+ * (every row exactly `columns` chars), so we look for >10 lines that are
+ * all within ±2 chars of the same length. This keeps detection on the body
+ * alone — no payload flag, DB column, or migration. Worst case of a false
+ * positive (a uniform-width text block) is harmless: it renders monospace.
+ */
+internal fun looksLikeAsciiArt(body: String): Boolean {
+    val lines = body.split('\n').let {
+        // A trailing newline produces an empty final element; drop it.
+        if (it.isNotEmpty() && it.last().isEmpty()) it.dropLast(1) else it
+    }
+    if (lines.size <= 10) return false
+    val lengths = lines.map { it.length }
+    val min = lengths.min()
+    val max = lengths.max()
+    // Ignore all-blank lines (length 0) wouldn't satisfy this anyway; require
+    // the lines to be substantial and near-uniform width.
+    return min > 0 && (max - min) <= 2
 }
 
 /**
