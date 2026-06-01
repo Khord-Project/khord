@@ -223,46 +223,77 @@ class ChatViewModel(
      * locally so the sender can re-view it (the relay's one-time read
      * won't let it re-fetch its own blob).
      */
-    fun sendImage(context: Context, uri: Uri, caption: String) {
+    fun sendImages(context: Context, uris: List<Uri>, caption: String) {
         if (_state.value.contactStatus == ContactStatus.Unavailable) return
         val appContext = context.applicationContext
         viewModelScope.launch(Dispatchers.IO) {
             mutex.withLock {
                 _state.update { it.copy(sending = true, error = null) }
-                runCatching {
-                    val messaging = AppContainer.messaging ?: error("not initialised")
-                    val contact = messaging.contacts().firstOrNull {
-                        it.contactFingerprint == contactFingerprint
-                    } ?: error("contact session not found")
-                    val processed = ImageProcessor.process(appContext, uri)
-                    // Returns the message UUID — stable even when the send is
-                    // queued offline (no media id assigned until upload).
-                    val messageUuid = messaging.sendImageMessage(
-                        contact = contact,
-                        fullImageBytes = processed.full,
-                        thumbnailBytes = processed.thumbnail,
-                        caption = caption.trim(),
-                    )
-                    // Cache the plaintext full image (keyed by the UUID) + record
-                    // its path so the sender's own bubble shows the full image
-                    // immediately, online or queued.
-                    val path = MediaCache.write(appContext, messageUuid, processed.full)
-                    messaging.messageHistory(contactFingerprint)
-                        .firstOrNull { it.messageUuid == messageUuid }
-                        ?.let { messaging.setMessageImageCached(it.id, path) }
-                    reloadHistoryLocked()
-                }.onFailure { e ->
-                    when {
-                        looksLikeDeadContact(e) -> _state.update {
-                            it.copy(contactStatus = ContactStatus.Unavailable, error = null)
-                        }
-                        isTransientNetwork(e) -> { /* offline: queued, appears pending */ }
-                        else -> _state.update {
-                            it.copy(error = e.message ?: e::class.simpleName, errorCause = e)
-                        }
-                    }
+                // Each image is its own message, sent in selection order.
+                for (uri in uris) {
+                    runCatching {
+                        val messaging = AppContainer.messaging ?: error("not initialised")
+                        val contact = messaging.contacts().firstOrNull {
+                            it.contactFingerprint == contactFingerprint
+                        } ?: error("contact session not found")
+                        val processed = ImageProcessor.process(appContext, uri)
+                        // Returns the message UUID — stable even when the send is
+                        // queued offline (no media id assigned until upload).
+                        val messageUuid = messaging.sendImageMessage(
+                            contact = contact,
+                            fullImageBytes = processed.full,
+                            thumbnailBytes = processed.thumbnail,
+                            caption = caption.trim(),
+                        )
+                        // Cache the plaintext full image (keyed by the UUID) +
+                        // record its path so the sender's own bubble shows it
+                        // immediately, online or queued.
+                        val path = MediaCache.write(appContext, messageUuid, processed.full)
+                        messaging.messageHistory(contactFingerprint)
+                            .firstOrNull { it.messageUuid == messageUuid }
+                            ?.let { messaging.setMessageImageCached(it.id, path) }
+                    }.onFailure { handleSendFailure(it) }
                 }
+                reloadHistoryLocked()
                 _state.update { it.copy(sending = false) }
+            }
+        }
+    }
+
+    /**
+     * Convert each picked image to ASCII art and send it as a plain text
+     * message (feat/ascii-art-send) — no media upload, no key, no thumbnail.
+     */
+    fun sendAsciiImages(context: Context, uris: List<Uri>) {
+        if (_state.value.contactStatus == ContactStatus.Unavailable) return
+        val appContext = context.applicationContext
+        viewModelScope.launch(Dispatchers.IO) {
+            mutex.withLock {
+                _state.update { it.copy(sending = true, error = null) }
+                for (uri in uris) {
+                    runCatching {
+                        val messaging = AppContainer.messaging ?: error("not initialised")
+                        val contact = messaging.contacts().firstOrNull {
+                            it.contactFingerprint == contactFingerprint
+                        } ?: error("contact session not found")
+                        val ascii = org.khord.android.media.ImageToAscii.fromUri(appContext, uri)
+                        messaging.sendMessage(contact, ascii)
+                    }.onFailure { handleSendFailure(it) }
+                }
+                reloadHistoryLocked()
+                _state.update { it.copy(sending = false) }
+            }
+        }
+    }
+
+    private fun handleSendFailure(e: Throwable) {
+        when {
+            looksLikeDeadContact(e) -> _state.update {
+                it.copy(contactStatus = ContactStatus.Unavailable, error = null)
+            }
+            isTransientNetwork(e) -> { /* offline: queued, appears pending */ }
+            else -> _state.update {
+                it.copy(error = e.message ?: e::class.simpleName, errorCause = e)
             }
         }
     }

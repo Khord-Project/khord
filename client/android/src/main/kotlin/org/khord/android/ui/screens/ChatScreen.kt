@@ -151,20 +151,26 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
         // Image-attachment UI state (ADR 029): the picked-but-not-yet-sent
         // image awaiting a caption, and the cached path currently open
         // full-screen (null = no overlay).
-        var pendingImage by remember { mutableStateOf<android.net.Uri?>(null) }
+        var pendingImages by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
         var fullScreen by remember { mutableStateOf<FullScreenImage?>(null) }
+        val asciiDefault = remember {
+            org.khord.android.media.ImageSendMode.load(context) ==
+                org.khord.android.media.ImageSendMode.ASCII
+        }
         val photoPicker = rememberLauncherForActivityResult(
-            ActivityResultContracts.PickVisualMedia(),
-        ) { uri -> if (uri != null) pendingImage = uri }
+            ActivityResultContracts.PickMultipleVisualMedia(),
+        ) { uris -> if (uris.isNotEmpty()) pendingImages = uris }
 
-        pendingImage?.let { uri ->
+        if (pendingImages.isNotEmpty()) {
             ImagePreviewSheet(
-                uri = uri,
+                uris = pendingImages,
                 sending = state.sending,
-                onCancel = { pendingImage = null },
-                onSend = { caption ->
-                    vm.sendImage(context, uri, caption)
-                    pendingImage = null
+                asciiDefault = asciiDefault,
+                onCancel = { pendingImages = emptyList() },
+                onSend = { uris, caption, asAscii ->
+                    if (asAscii) vm.sendAsciiImages(context, uris)
+                    else vm.sendImages(context, uris, caption)
+                    pendingImages = emptyList()
                 },
             )
         }
