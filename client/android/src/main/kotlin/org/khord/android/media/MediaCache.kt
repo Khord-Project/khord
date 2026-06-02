@@ -31,4 +31,24 @@ object MediaCache {
 
     /** Read cached bytes by path, or null if the file is gone. */
     fun read(path: String): ByteArray? = File(path).takeIf { it.exists() }?.readBytes()
+
+    /**
+     * Delete EVERY decrypted image on disk. Called from panic (ADR 030 /
+     * privacy): these are plaintext JPEGs in app-private storage, and the
+     * panic guarantee — "wipes everything on this device" — must include
+     * them. The DB (keys, thumbnails, cached-path refs) is wiped separately;
+     * this removes the actual decrypted bytes.
+     */
+    fun clear(context: Context) {
+        dir(context).deleteRecursively()
+    }
+
+    /**
+     * Delete specific cached files by absolute path — used when a contact is
+     * deleted, so that contact's decrypted images don't linger after the
+     * message rows are gone. No-op for paths that don't exist.
+     */
+    fun deletePaths(paths: Collection<String>) {
+        for (p in paths) runCatching { File(p).delete() }
+    }
 }

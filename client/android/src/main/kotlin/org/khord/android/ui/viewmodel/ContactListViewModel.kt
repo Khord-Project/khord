@@ -114,7 +114,15 @@ class ContactListViewModel : ViewModel() {
             mutex.withLock {
                 try {
                     val messaging = AppContainer.messaging ?: error("messaging not initialised")
+                    // Grab the contact's decrypted-image cache paths BEFORE the
+                    // delete cascades the message rows away, so we can remove
+                    // the plaintext JPEGs too (they're keyed by message, not
+                    // contact — deleteContact wouldn't otherwise touch them).
+                    val cachedPaths = runCatching {
+                        messaging.messageHistory(fingerprint).mapNotNull { it.media?.cachedPath }
+                    }.getOrDefault(emptyList())
                     messaging.deleteContact(fingerprint)
+                    org.khord.android.media.MediaCache.deletePaths(cachedPaths)
                     (PlatformContextProvider.get() as? Context)?.let { ctx ->
                         runCatching { PushServiceController.refresh(ctx) }
                     }

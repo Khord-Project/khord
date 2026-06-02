@@ -344,6 +344,33 @@ private fun ImageSendSection() {
                 },
             )
         }
+        // Re-enable the "saving leaves encrypted storage" warning after the
+        // user dismissed it with "Don't ask again" (fix/media-panic-cleanup).
+        var warnOnSave by remember {
+            mutableStateOf(org.khord.android.media.GallerySaver.shouldWarn(context))
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Warn before saving to device", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Show the reminder that saving an image to your gallery copies it " +
+                        "out of Khord's encrypted storage.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            androidx.compose.material3.Switch(
+                checked = warnOnSave,
+                onCheckedChange = {
+                    warnOnSave = it
+                    org.khord.android.media.GallerySaver.setWarn(context, it)
+                },
+            )
+        }
     }
 }
 
