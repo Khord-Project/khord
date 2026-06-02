@@ -1,9 +1,15 @@
 package org.khord.android.ui.screens
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,8 +33,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -43,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,9 +68,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.khord.android.media.GallerySaver
 import org.khord.android.AppContainer
 import org.khord.android.ui.theme.LocalKhordChatColors
 import org.khord.shared.protocol.orchestrator.MediaEntry
@@ -280,9 +293,61 @@ private fun PreviewThumb(uri: Uri) {
 @Composable
 fun FullScreenImageViewer(path: String, caption: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val bmp = remember(path) {
         runCatching { BitmapFactory.decodeFile(path)?.asImageBitmap() }.getOrNull()
     }
+
+    // "Save to device" — opt-in copy OUT of encrypted storage (Task 2).
+    var showSaveWarning by remember { mutableStateOf(false) }
+    val saveNow = {
+        scope.launch(Dispatchers.IO) {
+            val ok = GallerySaver.save(context, path)
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    context,
+                    if (ok) "Saved to gallery" else "Couldn't save image",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+        Unit
+    }
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) saveNow()
+        else Toast.makeText(
+            context, "Storage permission needed to save", Toast.LENGTH_SHORT,
+        ).show()
+    }
+    // Pre-Q needs WRITE_EXTERNAL_STORAGE; Q+ uses scoped storage (no perm).
+    val ensurePermAndSave = {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            permLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            saveNow()
+        }
+    }
+    val onSaveClick = {
+        if (GallerySaver.shouldWarn(context)) showSaveWarning = true else ensurePermAndSave()
+    }
+
+    if (showSaveWarning) {
+        SaveToDeviceWarningDialog(
+            onConfirm = { dontAskAgain ->
+                if (dontAskAgain) GallerySaver.setWarn(context, false)
+                showSaveWarning = false
+                ensurePermAndSave()
+            },
+            onDismiss = { showSaveWarning = false },
+        )
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -317,11 +382,17 @@ fun FullScreenImageViewer(path: String, caption: String, onDismiss: () -> Unit) 
             ) {
                 Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
             }
-            IconButton(
-                onClick = { shareImage(context, path) },
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-            ) {
-                Icon(Icons.Filled.Share, contentDescription = "Share", tint = Color.White)
+            Row(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                IconButton(onClick = onSaveClick) {
+                    Icon(
+                        Icons.Filled.Save,
+                        contentDescription = "Save to device",
+                        tint = Color.White,
+                    )
+                }
+                IconButton(onClick = { shareImage(context, path) }) {
+                    Icon(Icons.Filled.Share, contentDescription = "Share", tint = Color.White)
+                }
             }
             if (caption.isNotEmpty()) {
                 Text(
@@ -333,6 +404,45 @@ fun FullScreenImageViewer(path: String, caption: String, onDismiss: () -> Unit) 
             }
         }
     }
+}
+
+/**
+ * One-time warning before copying an image out of Khord's encrypted storage
+ * (Task 2). The "Don't ask again" checkbox persists via [GallerySaver.setWarn]
+ * — and can be re-enabled from Settings, so the warning is never permanently
+ * bypassed against the user's wish.
+ */
+@Composable
+private fun SaveToDeviceWarningDialog(
+    onConfirm: (dontAskAgain: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var dontAskAgain by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save to device storage?") },
+        text = {
+            Column {
+                Text(
+                    "This copies the image outside of Khord's encrypted storage. " +
+                        "Other apps may be able to access it, and it will not be " +
+                        "deleted by the panic button.",
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = dontAskAgain, onCheckedChange = { dontAskAgain = it })
+                    Spacer(Modifier.width(4.dp))
+                    Text("Don't ask again")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(dontAskAgain) }) { Text("Save anyway") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 /** Share a cached image via the system sheet using the app's FileProvider. */

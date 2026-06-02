@@ -5,6 +5,16 @@
     <uses-permission android:name="android.permission.CAMERA" />
 
     <!--
+         Only needed to save an image to the shared gallery on pre-Android-10
+         (the opt-in "Save to device" action). Android 10+ uses scoped
+         storage (MediaStore RELATIVE_PATH) which needs no permission, so
+         maxSdkVersion caps this at API 28.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!--
          Foreground service for the WebSocket push listener (ADR 022).
          specialUse, not dataSync: Android 14+ enforces a 6-hour cap on
          dataSync services and throws ForegroundServiceDidNotStopInTimeException

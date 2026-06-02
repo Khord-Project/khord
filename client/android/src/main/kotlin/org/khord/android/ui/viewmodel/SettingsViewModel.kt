@@ -155,6 +155,11 @@ class SettingsViewModel : ViewModel() {
                 // already-wiped persistence layer.
                 (PlatformContextProvider.get() as? Context)?.let {
                     runCatching { PushServiceController.stop(it) }
+                    // Wipe the decrypted-image cache (plaintext JPEGs in
+                    // files/media) — the DB wipe below removes the keys +
+                    // path refs, but the panic guarantee must also delete
+                    // the actual decrypted bytes on disk.
+                    runCatching { org.khord.android.media.MediaCache.clear(it) }
                 }
                 AppContainer.messaging?.panic()
                 AppContainer.keyStore?.clear()
