@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import kotlinx.coroutines.launch
 import org.khord.android.AppContainer
 import org.khord.android.BuildConfig
 import org.khord.android.nav.Routes
@@ -341,6 +342,11 @@ private fun ImageSendSection() {
                         if (it) org.khord.android.media.ImageSendMode.ASCII
                         else org.khord.android.media.ImageSendMode.IMAGE,
                     )
+                    // Tell every accepted contact about the change
+                    // (feat/capability-notice): ASCII on => images_accepted=false.
+                    AppContainer.applicationScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        runCatching { AppContainer.messaging?.sendCapabilityNotice(!it) }
+                    }
                 },
             )
         }

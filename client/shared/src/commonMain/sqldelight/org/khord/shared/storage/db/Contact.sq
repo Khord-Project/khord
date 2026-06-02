@@ -47,7 +47,13 @@ CREATE TABLE contact (
     -- blocked: drop on receive, hide from list, refuse sends.
     -- muted: store + show but suppress notifications. Added by 8.sqm.
     blocked            INTEGER NOT NULL DEFAULT 0,
-    muted              INTEGER NOT NULL DEFAULT 0
+    muted              INTEGER NOT NULL DEFAULT 0,
+    -- Whether this contact accepts image attachments, learned from their
+    -- `capability_notice` payloads (feat/capability-notice). LOCAL to us —
+    -- the contact's stated preference, a UI hint not a hard filter:
+    -- 1 = accepts images (default until told otherwise), 0 = prefers
+    -- text-only. Added by 13.sqm.
+    images_accepted    INTEGER NOT NULL DEFAULT 1
 );
 
 -- INSERT OR REPLACE replaces every column including pending_payload.
@@ -59,11 +65,15 @@ upsertContact:
 INSERT OR REPLACE INTO contact(
     fingerprint, ed25519_public, key_server_url, relay_server_url,
     contact_mailbox, stored_at, display_name, status,
-    pending_payload, verified, local_display_name, blocked, muted
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    pending_payload, verified, local_display_name, blocked, muted,
+    images_accepted
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 setContactPendingPayload:
 UPDATE contact SET pending_payload = ? WHERE fingerprint = ?;
+
+setContactImagesAccepted:
+UPDATE contact SET images_accepted = ? WHERE fingerprint = ?;
 
 setContactVerified:
 UPDATE contact SET verified = ? WHERE fingerprint = ?;

@@ -75,6 +75,7 @@ internal class InMemoryPersistence : Persistence {
             localDisplayName = existing?.localDisplayName,
             blocked = existing?.blocked ?: false,
             muted = existing?.muted ?: false,
+            imagesAccepted = existing?.imagesAccepted ?: true,
         )
     }
     override suspend fun loadContact(fingerprint: String): ContactInfo? = contacts[fingerprint]
@@ -118,6 +119,10 @@ internal class InMemoryPersistence : Persistence {
 
     override suspend fun setContactMuted(fingerprint: String, muted: Boolean) {
         contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(muted = muted) }
+    }
+
+    override suspend fun setContactImagesAccepted(fingerprint: String, accepted: Boolean) {
+        contacts[fingerprint]?.let { contacts[fingerprint] = it.copy(imagesAccepted = accepted) }
     }
 
     override suspend fun loadBlockedContacts(): List<ContactInfo> =

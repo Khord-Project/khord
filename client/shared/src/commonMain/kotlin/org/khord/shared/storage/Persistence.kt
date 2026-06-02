@@ -118,6 +118,13 @@ internal interface Persistence {
     /** Set/clear the mute flag (#27). No-op for unknown fingerprints. */
     suspend fun setContactMuted(fingerprint: String, muted: Boolean)
 
+    /**
+     * Set the contact's image-acceptance hint from a received
+     * `capability_notice` (feat/capability-notice). Local-only; never sent
+     * back. No-op for unknown fingerprints.
+     */
+    suspend fun setContactImagesAccepted(fingerprint: String, accepted: Boolean)
+
     /** All blocked contacts — backs the Settings → Blocked list. */
     suspend fun loadBlockedContacts(): List<ContactInfo>
 
@@ -387,6 +394,11 @@ internal data class ContactInfo(
     val blocked: Boolean = false,
     /** Local-only mute flag (#27). See Contact.sq. */
     val muted: Boolean = false,
+    /**
+     * Whether this contact accepts image attachments (feat/capability-notice).
+     * Learned from their `capability_notice`; local hint, defaults true.
+     */
+    val imagesAccepted: Boolean = true,
 )
 
 internal enum class ContactStatus {

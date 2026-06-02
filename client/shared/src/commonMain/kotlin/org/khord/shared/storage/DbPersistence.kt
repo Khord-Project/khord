@@ -148,6 +148,10 @@ internal class DbPersistence(
                 local_display_name = existing?.local_display_name,
                 blocked = existing?.blocked ?: 0L,
                 muted = existing?.muted ?: 0L,
+                // Preserve the learned image preference across re-upserts;
+                // only the capability-notice receive path mutates it via
+                // [setContactImagesAccepted]. Default 1 (accepts) for new rows.
+                images_accepted = existing?.images_accepted ?: 1L,
             )
         }
     }
@@ -157,6 +161,7 @@ internal class DbPersistence(
         relayServerUrl: String, contactMailbox: String, displayNameCol: String,
         statusCol: String, pendingPayload: String?, verifiedCol: Long,
         localDisplayName: String?, blockedCol: Long, mutedCol: Long,
+        imagesAcceptedCol: Long,
     ): ContactInfo = ContactInfo(
         qr = rowToQr(fingerprint, ed25519Public, keyServerUrl, relayServerUrl, contactMailbox),
         displayName = displayNameCol,
@@ -166,6 +171,7 @@ internal class DbPersistence(
         localDisplayName = localDisplayName,
         blocked = blockedCol != 0L,
         muted = mutedCol != 0L,
+        imagesAccepted = imagesAcceptedCol != 0L,
     )
 
     override suspend fun loadContact(fingerprint: String): ContactInfo? {
@@ -175,7 +181,7 @@ internal class DbPersistence(
             row.fingerprint, row.ed25519_public, row.key_server_url,
             row.relay_server_url, row.contact_mailbox, row.display_name,
             row.status, row.pending_payload, row.verified,
-            row.local_display_name, row.blocked, row.muted,
+            row.local_display_name, row.blocked, row.muted, row.images_accepted,
         )
     }
 
@@ -185,7 +191,7 @@ internal class DbPersistence(
                 it.fingerprint, it.ed25519_public, it.key_server_url,
                 it.relay_server_url, it.contact_mailbox, it.display_name,
                 it.status, it.pending_payload, it.verified,
-                it.local_display_name, it.blocked, it.muted,
+                it.local_display_name, it.blocked, it.muted, it.images_accepted,
             )
         }
 
@@ -195,7 +201,7 @@ internal class DbPersistence(
                 it.fingerprint, it.ed25519_public, it.key_server_url,
                 it.relay_server_url, it.contact_mailbox, it.display_name,
                 it.status, it.pending_payload, it.verified,
-                it.local_display_name, it.blocked, it.muted,
+                it.local_display_name, it.blocked, it.muted, it.images_accepted,
             )
         }
 
@@ -205,7 +211,7 @@ internal class DbPersistence(
                 it.fingerprint, it.ed25519_public, it.key_server_url,
                 it.relay_server_url, it.contact_mailbox, it.display_name,
                 it.status, it.pending_payload, it.verified,
-                it.local_display_name, it.blocked, it.muted,
+                it.local_display_name, it.blocked, it.muted, it.images_accepted,
             )
         }
 
@@ -240,6 +246,10 @@ internal class DbPersistence(
 
     override suspend fun setContactMuted(fingerprint: String, muted: Boolean) {
         db.contactQueries.setContactMuted(if (muted) 1L else 0L, fingerprint)
+    }
+
+    override suspend fun setContactImagesAccepted(fingerprint: String, accepted: Boolean) {
+        db.contactQueries.setContactImagesAccepted(if (accepted) 1L else 0L, fingerprint)
     }
 
     override suspend fun deleteContact(fingerprint: String) {

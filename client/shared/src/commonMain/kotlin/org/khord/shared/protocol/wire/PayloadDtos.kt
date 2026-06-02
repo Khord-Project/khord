@@ -125,6 +125,17 @@ internal data class InnerPayload(
     val mediaRelay: String? = null,
     /** Base64 of the encrypted thumbnail (ct||tag), decrypted inline for instant preview. */
     val thumbnail: String? = null,
+
+    // ── Capability notice (feat/capability-notice) ───────────────────
+    /**
+     * Present only on `type = "capability_notice"`: tells the recipient
+     * whether the sender wants to receive image attachments. The recipient
+     * stores it as a local hint on the contact (contact.images_accepted)
+     * and surfaces a "prefers text-only" banner; it never hard-blocks
+     * sending. Scoped to images for now — extensible to other capabilities
+     * later. Null on every other payload type.
+     */
+    val imagesAccepted: Boolean? = null,
 )
 
 /**

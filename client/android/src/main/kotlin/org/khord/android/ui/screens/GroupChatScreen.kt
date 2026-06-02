@@ -122,19 +122,45 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
         // Image-attachment UI state (ADR 029) — see ChatScreen.
         var pendingImages by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
         var fullScreen by remember { mutableStateOf<GroupFullScreenImage?>(null) }
-        val asciiDefault = remember {
+        val prefAscii = remember {
             org.khord.android.media.ImageSendMode.load(context) ==
                 org.khord.android.media.ImageSendMode.ASCII
         }
+        var asciiBias by remember { mutableStateOf(prefAscii) }
+        var showTextOnlyDialog by remember { mutableStateOf(false) }
         val photoPicker = rememberLauncherForActivityResult(
             ActivityResultContracts.PickMultipleVisualMedia(),
         ) { uris -> if (uris.isNotEmpty()) pendingImages = uris }
+
+        if (showTextOnlyDialog) {
+            val names = state.textOnlyMembers
+            TextOnlyPreferenceDialog(
+                who = when (names.size) {
+                    0 -> "Some members"
+                    1 -> names.first()
+                    else -> "${names.size} members"
+                },
+                onSendAscii = {
+                    showTextOnlyDialog = false; asciiBias = true
+                    photoPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
+                },
+                onSendImage = {
+                    showTextOnlyDialog = false; asciiBias = false
+                    photoPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
+                },
+                onCancel = { showTextOnlyDialog = false },
+            )
+        }
 
         if (pendingImages.isNotEmpty()) {
             ImagePreviewSheet(
                 uris = pendingImages,
                 sending = state.sending,
-                asciiDefault = asciiDefault,
+                asciiDefault = asciiBias,
                 onCancel = { pendingImages = emptyList() },
                 onSend = { uris, caption, asAscii ->
                     if (asAscii) vm.sendAsciiImages(context, uris)
@@ -206,6 +232,7 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                         onOpenImage = { path -> fullScreen = GroupFullScreenImage(path, msg.body) },
                         onRetryFailed = { vm.retryMessage(it) },
                         onDeleteFailed = { vm.deleteMessage(it) },
+                        asciiMode = prefAscii,
                     )
                 }
             }
@@ -236,6 +263,15 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                         vm.clearError()
                     },
                 )
+            }
+            if (state.textOnlyMembers.isNotEmpty()) {
+                val names = state.textOnlyMembers
+                val label = when (names.size) {
+                    1 -> "${names.first()} prefers text-only messages"
+                    2 -> "${names[0]} and ${names[1]} prefer text-only messages"
+                    else -> "${names.size} members prefer text-only messages"
+                }
+                TextOnlyBanner(label)
             }
             if (editingUuid != null) {
                 Row(
@@ -290,11 +326,16 @@ fun GroupChatScreen(nav: NavController, groupId: String) {
                     IconButton(
                         enabled = !state.sending,
                         onClick = {
-                            photoPicker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                ),
-                            )
+                            if (state.textOnlyMembers.isNotEmpty()) {
+                                showTextOnlyDialog = true
+                            } else {
+                                asciiBias = prefAscii
+                                photoPicker.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                    ),
+                                )
+                            }
                         },
                     ) {
                         Icon(
@@ -370,6 +411,7 @@ private fun GroupMessageRow(
     onOpenImage: (path: String) -> Unit,
     onRetryFailed: (uuid: String) -> Unit,
     onDeleteFailed: (uuid: String) -> Unit,
+    asciiMode: Boolean,
 ) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val align = if (isSent) Alignment.End else Alignment.Start
@@ -399,6 +441,7 @@ private fun GroupMessageRow(
                     downloading = media.mediaId in downloadingMedia,
                     onDownload = { onDownloadImage(media.mediaId) },
                     onOpenFull = onOpenImage,
+                    asciiMode = asciiMode,
                 )
             } else {
                 MessageBubble(
