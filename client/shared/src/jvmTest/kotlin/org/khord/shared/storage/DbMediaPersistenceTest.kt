@@ -224,4 +224,46 @@ class DbMediaPersistenceTest {
         assertTrue(KhordDatabase.Schema.version >= 13, "schema version did not advance to 13")
         driver.close()
     }
+
+    /**
+     * Capability notices (feat/capability-notice): a v13 contact table
+     * migrates to v14 by adding images_accepted (default 1). Existing rows
+     * must back-fill to "accepts images" so no upgraded contact is suddenly
+     * treated as text-only.
+     */
+    @Test
+    fun migration_13_to_14_adds_images_accepted_defaulting_true() {
+        val dbPath = Path(tempDir.absolutePath, "migrate14-${System.nanoTime()}.db").absolutePathString()
+        val driver = JdbcSqliteDriver("jdbc:sqlite:$dbPath")
+
+        // v13 contact shape (pre images_accepted) with one existing row.
+        driver.execute(null, """
+            CREATE TABLE contact (
+                fingerprint TEXT NOT NULL PRIMARY KEY, ed25519_public BLOB NOT NULL,
+                key_server_url TEXT NOT NULL, relay_server_url TEXT NOT NULL,
+                contact_mailbox TEXT NOT NULL, stored_at TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'accepted',
+                pending_payload TEXT, verified INTEGER NOT NULL DEFAULT 0,
+                local_display_name TEXT, blocked INTEGER NOT NULL DEFAULT 0,
+                muted INTEGER NOT NULL DEFAULT 0
+            );
+        """.trimIndent(), 0)
+        driver.execute(null, """
+            INSERT INTO contact(fingerprint, ed25519_public, key_server_url,
+                relay_server_url, contact_mailbox, stored_at)
+            VALUES ('fp', x'00', 'ks', 'rs', 'mbox', 't');
+        """.trimIndent(), 0)
+
+        KhordDatabase.Schema.migrate(driver, 13, 14)
+
+        var accepted: Long? = null
+        driver.executeQuery(null, "SELECT images_accepted FROM contact WHERE fingerprint='fp';", { c ->
+            if (c.next().value) accepted = c.getLong(0)
+            app.cash.sqldelight.db.QueryResult.Unit
+        }, 0)
+        assertEquals(1L, accepted, "existing contact must back-fill to accepts-images")
+
+        assertTrue(KhordDatabase.Schema.version >= 14, "schema version did not advance to 14")
+        driver.close()
+    }
 }

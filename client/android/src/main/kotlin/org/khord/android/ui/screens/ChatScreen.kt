@@ -153,19 +153,44 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
         // full-screen (null = no overlay).
         var pendingImages by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
         var fullScreen by remember { mutableStateOf<FullScreenImage?>(null) }
-        val asciiDefault = remember {
+        val prefAscii = remember {
             org.khord.android.media.ImageSendMode.load(context) ==
                 org.khord.android.media.ImageSendMode.ASCII
         }
+        // Which mode the preview sheet defaults to. Normally the saved pref;
+        // the "prefers text-only" send-anyway dialog can bias it per send.
+        var asciiBias by remember { mutableStateOf(prefAscii) }
+        var showTextOnlyDialog by remember { mutableStateOf(false) }
         val photoPicker = rememberLauncherForActivityResult(
             ActivityResultContracts.PickMultipleVisualMedia(),
         ) { uris -> if (uris.isNotEmpty()) pendingImages = uris }
+
+        if (showTextOnlyDialog) {
+            TextOnlyPreferenceDialog(
+                who = state.contactDisplayName ?: "This contact",
+                onSendAscii = {
+                    showTextOnlyDialog = false
+                    asciiBias = true
+                    photoPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
+                },
+                onSendImage = {
+                    showTextOnlyDialog = false
+                    asciiBias = false
+                    photoPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
+                },
+                onCancel = { showTextOnlyDialog = false },
+            )
+        }
 
         if (pendingImages.isNotEmpty()) {
             ImagePreviewSheet(
                 uris = pendingImages,
                 sending = state.sending,
-                asciiDefault = asciiDefault,
+                asciiDefault = asciiBias,
                 onCancel = { pendingImages = emptyList() },
                 onSend = { uris, caption, asAscii ->
                     if (asAscii) vm.sendAsciiImages(context, uris)
@@ -238,6 +263,7 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                         onOpenImage = { path -> fullScreen = FullScreenImage(path, msg.body) },
                         onRetryFailed = { vm.retryMessage(it) },
                         onDeleteFailed = { vm.deleteMessage(it) },
+                        asciiMode = prefAscii,
                     )
                 }
             }
@@ -273,6 +299,9 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                 ChatViewModel.ContactStatus.Unavailable
             if (unavailable) {
                 UnavailableBanner()
+            }
+            if (!state.imagesAccepted) {
+                TextOnlyBanner("${state.contactDisplayName ?: "This contact"} prefers text-only messages")
             }
             // Edit-mode banner — sits between the message list and
             // the composer. Cancel reverts to fresh-message mode
@@ -336,11 +365,18 @@ fun ChatScreen(nav: NavController, contactFingerprint: String) {
                     IconButton(
                         enabled = !state.sending && !unavailable,
                         onClick = {
-                            photoPicker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                ),
-                            )
+                            // If the contact prefers text-only, surface the
+                            // send-anyway dialog first (not a hard block).
+                            if (!state.imagesAccepted) {
+                                showTextOnlyDialog = true
+                            } else {
+                                asciiBias = prefAscii
+                                photoPicker.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                    ),
+                                )
+                            }
                         },
                     ) {
                         Icon(
@@ -451,6 +487,7 @@ private fun MessageRow(
     onOpenImage: (path: String) -> Unit,
     onRetryFailed: (uuid: String) -> Unit,
     onDeleteFailed: (uuid: String) -> Unit,
+    asciiMode: Boolean,
 ) {
     val isSent = msg.direction == MessageEntry.Direction.SENT
     val arrange = if (isSent) Arrangement.End else Arrangement.Start
@@ -476,6 +513,7 @@ private fun MessageRow(
                     downloading = media.mediaId in downloadingMedia,
                     onDownload = { onDownloadImage(media.mediaId) },
                     onOpenFull = onOpenImage,
+                    asciiMode = asciiMode,
                 )
             } else {
                 MessageBubble(

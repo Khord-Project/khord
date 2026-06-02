@@ -80,6 +80,12 @@ class ChatViewModel(
         val verified: Boolean = false,
         /** media_ids whose full image is currently being fetched/decrypted (ADR 029). */
         val downloadingMediaIds: Set<String> = emptySet(),
+        /**
+         * Whether this contact accepts images (feat/capability-notice).
+         * False → show the "prefers text-only" banner + the send-anyway
+         * dialog on attach. Defaults true.
+         */
+        val imagesAccepted: Boolean = true,
     )
 
     /** Called by ChatScreen after the user dismisses the bug-report dialog. */
@@ -370,11 +376,13 @@ class ChatViewModel(
         val history = messaging.messageHistory(contactFingerprint)
         val name = messaging.contactDisplayName(contactFingerprint)
         val verified = messaging.isContactVerified(contactFingerprint)
+        val imagesAccepted = messaging.contactImagesAccepted(contactFingerprint)
         _state.update {
             it.copy(
                 messages = history,
                 contactDisplayName = name,
                 verified = verified,
+                imagesAccepted = imagesAccepted,
             )
         }
     }

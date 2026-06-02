@@ -54,6 +54,11 @@ class GroupChatViewModel(
         val errorCause: Throwable? = null,
         /** media_ids whose full image is currently being fetched/decrypted (ADR 029). */
         val downloadingMediaIds: Set<String> = emptySet(),
+        /**
+         * Display names of members who prefer text-only (images_accepted=false,
+         * feat/capability-notice). Non-empty → show the text-only banner.
+         */
+        val textOnlyMembers: List<String> = emptyList(),
     )
 
     /** Called by GroupChatScreen after the user dismisses the bug-report dialog. */
@@ -289,8 +294,21 @@ class GroupChatViewModel(
                 m
             }
         }
+        // Members who prefer text-only (feat/capability-notice) — drives the
+        // group banner + the send-anyway dialog.
+        val textOnly = members
+            .filter { !messaging.contactImagesAccepted(it.fingerprint) }
+            .map { m ->
+                messaging.contactDisplayName(m.fingerprint)
+                    ?: m.displayName.ifEmpty { m.fingerprint.take(8) }
+            }
         _state.update {
-            it.copy(group = group, memberCount = members.size, messages = msgs)
+            it.copy(
+                group = group,
+                memberCount = members.size,
+                messages = msgs,
+                textOnlyMembers = textOnly,
+            )
         }
     }
 }

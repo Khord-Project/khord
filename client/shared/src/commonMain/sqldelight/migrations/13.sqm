@@ -1,0 +1,9 @@
+-- Migration from schema version 13 to 14.
+--
+-- Contact capability notices (feat/capability-notice). Adds a local
+-- `images_accepted` flag to each contact, learned from their
+-- `capability_notice` payloads: 1 = accepts image attachments (the default
+-- for every existing row), 0 = prefers text-only. It's a UI hint we hold
+-- about the contact, never transmitted, and never a hard send filter.
+
+ALTER TABLE contact ADD COLUMN images_accepted INTEGER NOT NULL DEFAULT 1;

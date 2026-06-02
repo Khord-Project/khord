@@ -14,6 +14,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +51,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,8 +66,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
@@ -103,10 +107,56 @@ fun ImageBubble(
     onDownload: () -> Unit,
     onOpenFull: (path: String) -> Unit,
     modifier: Modifier = Modifier,
+    // feat/capability-notice: when the device is in ASCII mode, incoming
+    // images are rendered as ASCII art (with a "Show original" toggle)
+    // rather than shown directly. The original is always still available.
+    asciiMode: Boolean = false,
 ) {
     val chat = LocalKhordChatColors.current
     val bg = if (isSent) chat.sentBubble else chat.receivedBubble
     val fg = if (isSent) chat.sentText else chat.receivedText
+    // Auto-ASCII applies only to RECEIVED images (you chose to send yours
+    // as an image). Toggled off per-message by "Show original".
+    var showOriginal by remember(media.mediaId) { mutableStateOf(false) }
+    val asciiText by produceState<String?>(null, media.cachedPath, asciiMode) {
+        val path = media.cachedPath
+        value = if (asciiMode && !isSent && path != null) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val bmp = BitmapFactory.decodeFile(path)
+                    if (bmp != null) org.khord.android.media.ImageToAscii.convert(bmp) else null
+                }.getOrNull()
+            }
+        } else {
+            null
+        }
+    }
+    // Render ASCII when we have it and the user hasn't asked for the original.
+    if (asciiText != null && !showOriginal) {
+        Column(
+            modifier = modifier
+                .widthIn(max = 340.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(bg)
+                .padding(8.dp),
+        ) {
+            Text(
+                text = asciiText!!,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 6.sp,
+                lineHeight = 7.sp,
+                color = fg,
+                softWrap = false,
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            )
+            if (caption.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text(caption, style = MaterialTheme.typography.bodyMedium, color = fg)
+            }
+            TextButton(onClick = { showOriginal = true }) { Text("Show original") }
+        }
+        return
+    }
 
     // Decrypt the tiny inline thumbnail once per media id — no network.
     val thumb by produceState<ImageBitmap?>(null, media.mediaId) {

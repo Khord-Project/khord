@@ -309,6 +309,14 @@ object AppContainer {
         messaging = b.messaging
         bootstrapRegeneratedKeystore = ks.lastLoadRegeneratedKey
 
+        // Seed the orchestrator's image preference from the saved setting so
+        // a capability_notice auto-sent on contact acceptance carries the
+        // right value (feat/capability-notice).
+        b.messaging?.setMyImagesAccepted(
+            org.khord.android.media.ImageSendMode.load(applicationContext) !=
+                org.khord.android.media.ImageSendMode.ASCII,
+        )
+
         // ADR 030: flush any messages queued in a previous session as soon
         // as we're back up. Fire-and-forget on the app scope so it doesn't
         // delay the splash → UI handoff. (The push service also drains on

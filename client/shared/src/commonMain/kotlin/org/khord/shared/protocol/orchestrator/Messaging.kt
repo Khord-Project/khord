@@ -84,6 +84,16 @@ class Messaging internal constructor(
     private val sendMutex = kotlinx.coroutines.sync.Mutex()
 
     /**
+     * This user's current "do I accept images" preference, mirrored from the
+     * Android ImageSendMode setting via [setMyImagesAccepted] on bootstrap
+     * and on toggle (feat/capability-notice). Used to stamp the
+     * `capability_notice` sent automatically when a new contact is accepted.
+     * Defaults to true (accepts images) until the platform layer sets it.
+     */
+    @Volatile
+    private var myImagesAccepted: Boolean = true
+
+    /**
      * Set to true after [panic]. Every public method throws [IllegalStateException]
      * after this, so the caller is forced to construct a fresh instance.
      */
@@ -335,6 +345,11 @@ class Messaging internal constructor(
         )
         contactsByFingerprint[contactQr.fingerprint] = info
         persistence.saveContact(contactQr, info.displayName, info.status)
+        // Tell the contact our current image preference (feat/capability-
+        // notice). No-op for a brand-new QR contact (no ratchet session
+        // until the first message establishes X3DH); it lands once a
+        // session exists, and the toggle fan-out covers established contacts.
+        runCatching { sendCapabilityNoticeTo(contactQr.fingerprint, myImagesAccepted) }
     }
 
     // ── Acceptance gate ─────────────────────────────────────────────────────
@@ -418,6 +433,9 @@ class Messaging internal constructor(
                 ?.copy(pendingPayload = null)
                 ?: contactsByFingerprint[fingerprint]!!
         }
+        // A pending contact already has a ratchet session (they sent us the
+        // X3DH initial), so the notice actually reaches them now. Best-effort.
+        runCatching { sendCapabilityNoticeTo(fingerprint, myImagesAccepted) }
     }
 
     /**
@@ -1567,6 +1585,7 @@ class Messaging internal constructor(
                 "group_member_left" -> handleGroupMemberLeft(currentContact, payload)
                 "group_name_changed" -> handleGroupNameChanged(currentContact, payload)
                 "message_edit" -> handleMessageEdit(currentContact, payload)
+                "capability_notice" -> handleCapabilityNotice(currentContact, payload)
                 else -> {
                     // Legacy one-to-one text path. decodeInnerPayloadText
                     // throws on unknown types, which is the documented
@@ -2084,6 +2103,94 @@ class Messaging internal constructor(
     /** Find an active ContactSession by fingerprint, or null if not friends. */
     private fun sessionForFingerprint(fp: String): ContactSession? =
         sessionsByInboundMailbox.values.firstOrNull { it.contactFingerprint == fp }
+
+    // ── Capability notices (feat/capability-notice) ─────────────────────────
+
+    /** This contact's stated image preference (local hint; default true). */
+    fun contactImagesAccepted(fingerprint: String): Boolean =
+        contactsByFingerprint[fingerprint]?.imagesAccepted ?: true
+
+    /**
+     * Mirror the platform's image-send preference into the orchestrator so
+     * an auto-sent notice on contact acceptance carries the right value.
+     * Does NOT fan out — call on bootstrap (seed from the saved pref) and
+     * whenever the toggle changes (the toggle itself uses
+     * [sendCapabilityNotice] to also broadcast).
+     */
+    fun setMyImagesAccepted(accepted: Boolean) {
+        myImagesAccepted = accepted
+    }
+
+    /**
+     * Broadcast a `capability_notice` to every ACCEPTED, non-blocked contact
+     * with a live session — used when the user flips the "send images as
+     * ASCII" setting. Best-effort: a contact we can't reach right now simply
+     * doesn't learn the new preference (the sender never knows either way).
+     * Blocked + pending contacts are skipped by design.
+     */
+    suspend fun sendCapabilityNotice(imagesAccepted: Boolean) {
+        checkAlive()
+        myImagesAccepted = imagesAccepted
+        sendMutex.withLock {
+            for (session in sessionsByInboundMailbox.values) {
+                val info = contactsByFingerprint[session.contactFingerprint]
+                if (info?.status != org.khord.shared.storage.ContactStatus.ACCEPTED) continue
+                if (info.blocked) continue
+                deliverCapabilityNotice(session, imagesAccepted)
+            }
+        }
+    }
+
+    /**
+     * Send the current preference to one freshly-accepted contact (called
+     * from [storeContact] / [acceptContact]). Best-effort; skips blocked or
+     * session-less fingerprints.
+     */
+    private suspend fun sendCapabilityNoticeTo(fingerprint: String, imagesAccepted: Boolean) {
+        if (isContactBlocked(fingerprint)) return
+        val session = sessionForFingerprint(fingerprint) ?: return
+        sendMutex.withLock { deliverCapabilityNotice(session, imagesAccepted) }
+    }
+
+    /**
+     * Encrypt + send a capability_notice over [contact]'s ratchet. Uses
+     * [deliverRatchet] so a failed send rolls the sending chain back (no
+     * desync) — the notice is simply dropped, consistent with its
+     * best-effort, fire-and-forget nature. MUST be called holding sendMutex.
+     */
+    private suspend fun deliverCapabilityNotice(contact: ContactSession, imagesAccepted: Boolean) {
+        val payload = InnerPayload(
+            type = "capability_notice",
+            timestamp = Clock.System.now().toString(),
+            replyInfo = myReplyInfo(contact.inboundMailboxId),
+            imagesAccepted = imagesAccepted,
+        )
+        deliverRatchet(contact, payload)
+    }
+
+    /**
+     * Apply an inbound capability_notice: update the local
+     * contact.images_accepted hint and, if it changed, drop a subtle system
+     * message into the chat (same idea as the session-reset marker). Never
+     * transmitted back; never added to the returned plaintexts (no banner).
+     */
+    private suspend fun handleCapabilityNotice(contact: ContactSession, payload: InnerPayload) {
+        val accepted = payload.imagesAccepted ?: return
+        val fp = contact.contactFingerprint
+        val current = contactsByFingerprint[fp]?.imagesAccepted ?: true
+        if (current == accepted) return
+        contactsByFingerprint[fp] = contactsByFingerprint[fp]?.copy(imagesAccepted = accepted)
+            ?: return
+        persistence.setContactImagesAccepted(fp, accepted)
+        val name = contactDisplayName(fp) ?: "This contact"
+        val body = if (accepted) "$name now accepts images" else "$name prefers text-only messages"
+        persistence.saveMessage(
+            contactFingerprint = fp,
+            direction = org.khord.shared.storage.MessageDirection.RECEIVED,
+            body = body,
+            timestamp = Clock.System.now().toString(),
+        )
+    }
 
     /**
      * Group payload dispatch helpers — invoked from [receiveMessages]
