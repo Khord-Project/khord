@@ -143,6 +143,28 @@ android {
     }
 }
 
+// Name output APKs by version so release artifacts are self-describing:
+//   prod    -> khord-0.1.0-beta.2.apk
+//   dev     -> khord-0.1.0-beta.2-dev.apk
+// With AGP's new DSL (android.newDsl=true, the default since AGP 9), the
+// legacy `applicationVariants` hook is gone — the `android {}` accessor is
+// an ApplicationExtension that doesn't expose it. The supported replacement
+// is the androidComponents Variant API. `outputFileName` isn't on the public
+// VariantOutput interface, so we cast to the impl (the established hook for
+// renaming APK outputs). The variant doesn't surface a resolved versionName,
+// so we rebuild it from defaultConfig plus the flavor's "-dev" suffix to keep
+// the two flavors distinct.
+val baseVersionName = android.defaultConfig.versionName ?: "unknown"
+androidComponents {
+    onVariants { variant ->
+        val suffix = if (variant.name.startsWith("dev")) "-dev" else ""
+        variant.outputs.forEach { output ->
+            (output as com.android.build.api.variant.impl.VariantOutputImpl)
+                .outputFileName.set("khord-$baseVersionName$suffix.apk")
+        }
+    }
+}
+
 dependencies {
     implementation(project(":shared"))
     implementation(libs.coroutines.android)
