@@ -149,7 +149,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: client/android/build/outputs/apk/prod/release/android-prod-release.apk
+          # Output APK is renamed to khord-<versionName>.apk by the
+          # androidComponents onVariants hook in android/build.gradle.kts,
+          # so glob it rather than hard-coding the version.
+          files: client/android/build/outputs/apk/prod/release/khord-*.apk
           # Tags containing `alpha` or `beta` are prereleases. Stable
           # tags (e.g. v0.1.0) are not, so they become /releases/latest.
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}

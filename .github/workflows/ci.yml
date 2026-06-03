@@ -208,12 +208,17 @@ jobs:
 
       - name: Locate the produced APK
         id: apk
+        # APK outputs are renamed to khord-<versionName>.apk by the
+        # androidComponents onVariants hook in android/build.gradle.kts, so
+        # glob rather than hard-code the version into the filename.
         run: |
-          if [ -f client/android/build/outputs/apk/prod/release/android-prod-release.apk ]; then
-            echo "path=client/android/build/outputs/apk/prod/release/android-prod-release.apk" >> "$GITHUB_OUTPUT"
+          release_apk=$(ls client/android/build/outputs/apk/prod/release/khord-*.apk 2>/dev/null | head -n1)
+          if [ -n "$release_apk" ]; then
+            echo "path=$release_apk" >> "$GITHUB_OUTPUT"
             echo "kind=release" >> "$GITHUB_OUTPUT"
           else
-            echo "path=client/android/build/outputs/apk/prod/debug/android-prod-debug.apk" >> "$GITHUB_OUTPUT"
+            debug_apk=$(ls client/android/build/outputs/apk/prod/debug/khord-*.apk 2>/dev/null | head -n1)
+            echo "path=$debug_apk" >> "$GITHUB_OUTPUT"
             echo "kind=debug" >> "$GITHUB_OUTPUT"
           fi
 
