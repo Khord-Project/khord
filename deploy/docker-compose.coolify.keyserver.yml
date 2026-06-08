@@ -37,6 +37,13 @@ services:
       # driver to be used".
       - DATABASE_URL=postgresql+asyncpg://khord_ks:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/khord_keyserver
       - KEY_SERVER_TOKEN_SECRET=${KEY_SERVER_TOKEN_SECRET}
+      # Trust Coolify's proxy (Traefik) X-Forwarded-For so the per-IP rate
+      # limits see the real client, not the proxy's container IP. The app is
+      # only reachable via the Coolify proxy network (no published host ports),
+      # so trusting the internal Docker ranges is spoof-resistant: uvicorn
+      # returns the first non-trusted hop, i.e. the real client. Override via
+      # the Coolify env UI to tighten if needed.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1}
       # ↓ Coolify magic. Bare name, no value. List form is required —
       # see the combined compose for the full reasoning (gotcha #2 in
       # the Coolify gotchas memory).

@@ -75,6 +75,12 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://keyserver:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/keyserver
       KEY_SERVER_TOKEN_SECRET: ${KEY_SERVER_TOKEN_SECRET}
+      # Trust Caddy's X-Forwarded-For so the per-IP rate limits see the real
+      # client, not Caddy's container IP. Caddy is the only ingress (the app
+      # binds no host ports), so trusting the internal Docker ranges is
+      # spoof-resistant — uvicorn returns the first non-trusted hop, i.e. the
+      # real client. Override to a tighter CIDR via .env if desired.
+      FORWARDED_ALLOW_IPS: "${FORWARDED_ALLOW_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1}"
     depends_on:
       keyserver-db:
         condition: service_healthy
@@ -124,6 +130,10 @@ services:
       # the user-facing config stays namespaced without touching server code.
       PROOF_OF_WORK_DIFFICULTY_BITS: ${RELAY_PROOF_OF_WORK_DIFFICULTY_BITS:-16}
       MESSAGE_TTL_SECONDS: ${RELAY_MESSAGE_TTL_SECONDS:-604800}
+      # Trust Caddy's X-Forwarded-For so per-IP rate limits and WS connection
+      # caps see the real client, not Caddy's container IP. See the keyserver
+      # service above for the spoof-resistance rationale.
+      FORWARDED_ALLOW_IPS: "${FORWARDED_ALLOW_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1}"
     depends_on:
       relayserver-db:
         condition: service_healthy

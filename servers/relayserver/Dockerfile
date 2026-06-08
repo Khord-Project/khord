@@ -24,4 +24,13 @@ EXPOSE 8000
 
 # --no-access-log is load-bearing: uvicorn's default access log embeds request
 # paths (which contain mailbox IDs), violating ADR 016 (allow-list logging).
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"]
+#
+# --proxy-headers + --forwarded-allow-ips make the per-IP rate limits and WS
+# connection caps see the REAL client address from X-Forwarded-For instead of
+# the reverse proxy's container IP (which would lump all clients into one
+# bucket). FORWARDED_ALLOW_IPS must list the trusted proxy network; uvicorn
+# then walks X-Forwarded-For past those trusted hops to the real client, which
+# also makes the header spoof-resistant. Defaults to 127.0.0.1 (no proxy
+# trusted) so a direct/dev deployment behaves unchanged; production composes
+# set it to the internal proxy network.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log --proxy-headers --forwarded-allow-ips ${FORWARDED_ALLOW_IPS:-127.0.0.1}"]

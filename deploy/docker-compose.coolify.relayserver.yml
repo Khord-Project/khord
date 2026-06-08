@@ -34,6 +34,13 @@ services:
       # names. Rebind here so no server-side code change is required.
       - PROOF_OF_WORK_DIFFICULTY_BITS=${RELAY_PROOF_OF_WORK_DIFFICULTY_BITS:-16}
       - MESSAGE_TTL_SECONDS=${RELAY_MESSAGE_TTL_SECONDS:-604800}
+      # Trust Coolify's proxy (Traefik) X-Forwarded-For so per-IP rate limits
+      # and WS connection caps see the real client, not the proxy's container
+      # IP. The app is only reachable via the Coolify proxy network (no
+      # published host ports), so trusting the internal Docker ranges is
+      # spoof-resistant: uvicorn returns the first non-trusted hop = real
+      # client. Override via the Coolify env UI to tighten if needed.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1}
       # ↓ Coolify magic. Bare name, no value, list-form required.
       - SERVICE_FQDN_RELAYSERVER_8000
     depends_on:

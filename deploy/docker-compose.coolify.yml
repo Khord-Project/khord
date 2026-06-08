@@ -62,6 +62,11 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://keyserver:${KEYSERVER_DB_PASSWORD}@keyserver-db:5432/keyserver
       - KEY_SERVER_TOKEN_SECRET=${KEY_SERVER_TOKEN_SECRET}
+      # Trust the Coolify proxy's X-Forwarded-For so per-IP rate limits see the
+      # real client, not the proxy IP. Only reachable via the proxy network (no
+      # published host ports), so trusting internal Docker ranges is
+      # spoof-resistant. Override via the Coolify env UI to tighten.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1}
       # ↓ Coolify magic. Bare name, no value. When Coolify rewrites the
       # compose for deployment, it (a) substitutes the configured FQDN
       # and (b) auto-emits Traefik labels routing that hostname to this
@@ -118,6 +123,10 @@ services:
       # change is required.
       - PROOF_OF_WORK_DIFFICULTY_BITS=${RELAY_PROOF_OF_WORK_DIFFICULTY_BITS:-16}
       - MESSAGE_TTL_SECONDS=${RELAY_MESSAGE_TTL_SECONDS:-604800}
+      # Trust the Coolify proxy's X-Forwarded-For so per-IP rate limits and WS
+      # connection caps see the real client, not the proxy IP. See the
+      # keyserver service above for the spoof-resistance rationale.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1}
       # ↓ Coolify magic — bare name, no value. See the equivalent block
       # on keyserver above for the full reasoning.
       - SERVICE_FQDN_RELAYSERVER_8000
