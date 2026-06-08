@@ -149,6 +149,16 @@ Response: 200 OK
 
 **Note:** One-time pre-keys are consumed on fetch (returned once, then deleted). If none remain, the response omits the field and X3DH proceeds without it (reduced properties but still functional per spec).
 
+**Rate limiting (abuse protection).** This endpoint is public and consumes a
+one-time pre-key on every call, so an unthrottled attacker could drain a
+victim's OPK pool and force every new conversation with them into the
+reduced-property (OPK-less) handshake. Two per-minute ceilings apply (see
+§12): a **per-fingerprint** limit (default 5/min) so one victim's pool can't
+be drained, and a **per-IP** limit (default 30/min) so one caller can't sweep
+many victims. Over either, the server returns `429 Too Many Requests` with a
+`Retry-After` header. Legitimate clients fetch a given bundle once per new
+conversation and never approach these limits.
+
 ### 4.3 Replenish One-Time Pre-Keys
 
 ```
@@ -274,6 +284,16 @@ Response: 202 Accepted
 
 **Note:** Sending is unauthenticated — knowing the mailbox ID is sufficient. This is intentional: the sender should not need to prove identity to the Relay Server.
 
+**Size and backlog caps (abuse protection).** A single message blob is capped
+at **256 KiB** of decoded bytes (default); larger payloads are rejected with
+`413 Request Entity Too Large`. Images are not sent inline — they go through
+the media endpoint, which has its own (larger) cap — so a text message never
+needs to be large. Each mailbox also holds at most **1000** live (unexpired)
+messages (default); once full, further sends are rejected with `429 Too Many
+Requests` until the recipient acknowledges (and the server deletes) some
+backlog or messages expire. Together these stop one sender filling the
+relay's storage. See §12.
+
 ### 5.3 Fetch Messages (REST polling)
 
 ```
@@ -333,6 +353,13 @@ Client sends acknowledgments:
   "through_sequence": <uint64>
 }
 ```
+
+**Connection caps (abuse protection).** To bound memory under connection-flood
+abuse, the server limits concurrent WebSocket connections to **10 per client
+IP** (across all mailboxes) and **5 subscribers per mailbox** (defaults). A
+connection beyond either cap is accepted and then immediately closed with code
+`1008` (policy violation). A normal client holds a single connection per open
+conversation and never approaches these limits. See §12.
 
 ### 5.6 Proof of Work (Mailbox Creation)
 
@@ -685,3 +712,57 @@ future revision.
 - Traffic analysis mitigations (Level 3)
 - Tor integration for connection-level privacy (Level 4b)
 - Hardware security key support for identity key storage
+
+## 12. Abuse Protections (Rate Limits & Storage Caps)
+
+Both servers apply spam/DoS protections in addition to the proof-of-work in
+§5.6. All thresholds below are **server-configured defaults** and may change;
+they are deliberately generous so a normal client never encounters them.
+Clients SHOULD treat `429 Too Many Requests` and `413 Request Entity Too
+Large` as ordinary, retryable conditions and honour any `Retry-After` header
+on a 429.
+
+**Per-IP rate limits.** Limiting is per client IP, fixed-window per minute:
+
+| Endpoint                                   | Default limit | On exceed |
+|--------------------------------------------|---------------|-----------|
+| All endpoints (blanket ceiling)            | 100 / min     | `429`     |
+| Key Server `POST /v1/auth/challenge`, `/verify` | 10 / min | `429`     |
+| Key Server `GET /v1/keys/{fp}/bundle` (per IP)  | 30 / min | `429`     |
+| Key Server `GET /v1/keys/{fp}/bundle` (per fingerprint) | 5 / min | `429` |
+| Relay Server `POST /v1/mailboxes`          | 10 / min      | `429`     |
+
+The bundle-fetch endpoint carries two independent limits (per-IP and
+per-fingerprint); whichever is reached first applies. Rationale for the
+per-fingerprint limit is in §4.2.
+
+**Relay storage caps.**
+
+| Cap                                 | Default  | On exceed |
+|-------------------------------------|----------|-----------|
+| Single message blob size (decoded)  | 256 KiB  | `413`     |
+| Live messages per mailbox           | 1000     | `429`     |
+| Single media blob size              | 10 MiB   | `413`     |
+
+Messages and media also carry a 7-day TTL and are deleted on acknowledgement
+/ first read; the caps above bound storage between those events.
+
+**WebSocket connection caps.** Concurrent WS connections are limited to **10
+per client IP** and **5 subscribers per mailbox** (defaults). A connection
+beyond either cap is closed with code `1008` immediately after the upgrade.
+
+**Request body size.** Every request body is capped at **12 MiB** at the
+transport layer (covering the largest media upload plus framing); a larger
+body is rejected with `413` before any handler runs.
+
+**PoW difficulty.** The mailbox-creation / media-upload proof-of-work
+difficulty (§5.6) is server-configured and advertised at `GET /v1/pow-params`
+(default 16 leading zero bits). Clients MUST read the advertised difficulty
+per attempt rather than assuming a fixed value.
+
+**Deployment note.** Per-IP limits and WS per-IP caps key on the client
+address as seen by the application. Behind a reverse proxy, the proxy must
+forward the real client address (e.g. uvicorn `--proxy-headers` with a
+trusted `--forwarded-allow-ips`), otherwise all traffic is attributed to the
+proxy IP. Limiter and WS-cap state is in-memory and per-process, consistent
+with the single-worker deployment the in-process notifier already requires.

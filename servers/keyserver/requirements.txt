@@ -1,5 +1,8 @@
 fastapi==0.136.1
 uvicorn[standard]==0.46.0
+# Per-IP / per-key rate limiting (spam-DoS hardening). In-memory storage —
+# matches the single-worker deployment (no shared limiter state needed).
+slowapi==0.1.9
 sqlalchemy[asyncio]==2.0.49
 asyncpg==0.31.0
 alembic==1.18.4

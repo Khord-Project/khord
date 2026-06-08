@@ -11,6 +11,7 @@ import base64
 import hashlib
 import secrets
 import time
+from contextlib import ExitStack
 
 import pytest
 from fastapi.testclient import TestClient
@@ -137,3 +138,66 @@ def test_ws_auth_timeout_closes(monkeypatch):
             with pytest.raises(WebSocketDisconnect) as excinfo:
                 ws.receive_text()
             assert excinfo.value.code == 1008
+
+
+def test_ws_per_mailbox_subscriber_cap():
+    """The (cap+1)-th subscriber to ONE mailbox is refused with 1008.
+
+    The cap is enforced at subscribe time (post-auth), so each held connection
+    authenticates first; the extra one authenticates too but is then refused.
+    """
+    cap = config_module.settings.max_ws_subscribers_per_mailbox
+    with TestClient(app) as tc:
+        mailbox_id, token = _create_mailbox_sync(tc)
+        with ExitStack() as stack:
+            for _ in range(cap):
+                ws = stack.enter_context(
+                    tc.websocket_connect(f"/v1/mailboxes/{mailbox_id}/ws")
+                )
+                ws.send_json({"type": "auth", "token": token})
+                # Let the handler process auth + subscribe before the next one.
+                time.sleep(0.05)
+
+            # One past the cap on the same mailbox → subscriber limit.
+            with tc.websocket_connect(
+                f"/v1/mailboxes/{mailbox_id}/ws"
+            ) as extra:
+                extra.send_json({"type": "auth", "token": token})
+                with pytest.raises(WebSocketDisconnect) as excinfo:
+                    extra.receive_text()
+                assert excinfo.value.code == 1008
+
+
+def test_ws_per_ip_connection_cap():
+    """The (cap+1)-th concurrent connection from one IP is refused with 1008.
+
+    Spread the held connections across two mailboxes so the per-mailbox cap is
+    never the thing that trips; only the per-IP ceiling can reject the extra
+    connection (which targets a fresh, empty mailbox).
+    """
+    ip_cap = config_module.settings.max_ws_connections_per_ip
+    mbox_cap = config_module.settings.max_ws_subscribers_per_mailbox
+    assert ip_cap % mbox_cap == 0, "test assumes ip_cap is a multiple of mbox_cap"
+    n_mailboxes = ip_cap // mbox_cap
+
+    with TestClient(app) as tc:
+        mailboxes = [_create_mailbox_sync(tc) for _ in range(n_mailboxes)]
+        spare_id, spare_token = _create_mailbox_sync(tc)
+
+        with ExitStack() as stack:
+            for mailbox_id, token in mailboxes:
+                for _ in range(mbox_cap):
+                    ws = stack.enter_context(
+                        tc.websocket_connect(f"/v1/mailboxes/{mailbox_id}/ws")
+                    )
+                    ws.send_json({"type": "auth", "token": token})
+                    time.sleep(0.02)
+
+            # ip_cap connections are now held from this IP. One more — to an
+            # empty mailbox, so per-mailbox has room — must still be refused.
+            with tc.websocket_connect(
+                f"/v1/mailboxes/{spare_id}/ws"
+            ) as extra:
+                with pytest.raises(WebSocketDisconnect) as excinfo:
+                    extra.receive_text()
+                assert excinfo.value.code == 1008

@@ -20,7 +20,7 @@ import binascii
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,7 @@ from app.config import settings
 from app.crypto import fingerprint_of, verify_ed25519
 from app.database import get_session
 from app.models import AuthChallenge, IdentityKey
+from app.ratelimit import limiter
 from app.schemas import ChallengeResponse, VerifyRequest, VerifyResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -49,7 +50,9 @@ def _b64decode(data: str) -> bytes:
 
 
 @router.get("/challenge/{fingerprint}", response_model=ChallengeResponse)
+@limiter.limit(settings.rate_limit_auth)
 async def request_challenge(
+    request: Request,
     fingerprint: str,
     session: AsyncSession = Depends(get_session),
 ) -> ChallengeResponse:
@@ -82,7 +85,9 @@ async def request_challenge(
 
 
 @router.post("/verify", response_model=VerifyResponse)
+@limiter.limit(settings.rate_limit_auth)
 async def verify_challenge(
+    request: Request,
     body: VerifyRequest,
     session: AsyncSession = Depends(get_session),
 ) -> VerifyResponse:
