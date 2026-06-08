@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import update
 
+from app.config import settings
 from app.models import Message
 
 from ._helpers import b64encode_str, create_mailbox, mine_pow, random_mailbox_id
@@ -33,7 +34,9 @@ async def test_create_mailbox_duplicate_409(client, db_session):
         "/v1/mailboxes",
         json={
             "mailbox_id": mailbox_id,
-            "proof_of_work": mine_pow(mailbox_id, 8),
+            "proof_of_work": mine_pow(
+                mailbox_id, settings.proof_of_work_difficulty_bits
+            ),
         },
     )
     assert r.status_code == 409
@@ -265,3 +268,78 @@ async def test_send_invalid_base64_400(client, db_session):
         json={"blob": "not_base64!!!"},
     )
     assert r.status_code == 400
+
+
+async def test_send_oversized_message_413(client, db_session):
+    """A text blob past message_max_size_bytes is rejected with 413."""
+    mailbox_id, _ = await create_mailbox(client)
+    # One byte over the cap, base64-encoded (still far under the 12 MiB body
+    # cap, so it reaches the handler's own size check rather than the ASGI one).
+    oversized = b"x" * (settings.message_max_size_bytes + 1)
+    r = await client.post(
+        f"/v1/mailboxes/{mailbox_id}/messages",
+        json={"blob": b64encode_str(oversized)},
+    )
+    assert r.status_code == 413
+
+
+async def test_send_at_size_cap_boundary_accepted(client, db_session):
+    """A blob exactly at the cap is still accepted (boundary is inclusive)."""
+    mailbox_id, _ = await create_mailbox(client)
+    at_cap = b"y" * settings.message_max_size_bytes
+    r = await client.post(
+        f"/v1/mailboxes/{mailbox_id}/messages",
+        json={"blob": b64encode_str(at_cap)},
+    )
+    assert r.status_code == 202
+
+
+async def test_mailbox_backlog_cap_429(client, db_session):
+    """Once a mailbox holds mailbox_max_messages live messages, the next send
+    is refused with 429 — one sender can't fill the relay's storage."""
+    mailbox_id, _ = await create_mailbox(client)
+
+    # Seed the cap directly (much faster than POSTing them all over HTTP).
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    for seq in range(1, settings.mailbox_max_messages + 1):
+        db_session.add(
+            Message(
+                mailbox_id=mailbox_id,
+                sequence=seq,
+                blob=b"x",
+                expires_at=future,
+            )
+        )
+    await db_session.commit()
+
+    # The mailbox now holds exactly the cap → the next send is rejected.
+    r = await client.post(
+        f"/v1/mailboxes/{mailbox_id}/messages",
+        json={"blob": b64encode_str(b"one too many")},
+    )
+    assert r.status_code == 429
+
+
+async def test_mailbox_backlog_cap_excludes_expired(client, db_session):
+    """Expired messages don't count toward the backlog cap — they're swept on
+    send, so a mailbox full of stale rows still accepts a fresh message."""
+    mailbox_id, _ = await create_mailbox(client)
+
+    past = datetime.now(timezone.utc) - timedelta(seconds=1)
+    for seq in range(1, settings.mailbox_max_messages + 1):
+        db_session.add(
+            Message(
+                mailbox_id=mailbox_id,
+                sequence=seq,
+                blob=b"x",
+                expires_at=past,  # already expired
+            )
+        )
+    await db_session.commit()
+
+    # All seeded rows are expired → cleanup drops them, count is 0, send is OK.
+    r = await client.post(
+        f"/v1/mailboxes/{mailbox_id}/messages",
+        json={"blob": b64encode_str(b"fresh after expiry")},
+    )
+    assert r.status_code == 202

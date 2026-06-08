@@ -15,6 +15,7 @@ both transports work without trampling each other.
 """
 import os
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -28,6 +29,35 @@ os.environ.setdefault(
 
 from app.database import get_session  # noqa: E402  (after env setup)
 from app.main import app  # noqa: E402
+from app.notifier import notifier  # noqa: E402
+from app.ratelimit import limiter, reset_limiter  # noqa: E402
+
+# Rate limiting is global, in-memory, and shared across the whole app, so it is
+# OFF by default during tests — otherwise counters would bleed between the many
+# functional tests and cause spurious 429s. The dedicated rate-limit tests opt
+# back in via the `rate_limited` fixture.
+limiter.enabled = False
+
+
+@pytest.fixture
+def rate_limited():
+    """Enable rate limiting (from a clean slate) for the duration of a test."""
+    reset_limiter()
+    limiter.enabled = True
+    yield
+    limiter.enabled = False
+    reset_limiter()
+
+
+@pytest.fixture(autouse=True)
+def _reset_notifier_state():
+    """Clear the module-singleton notifier's connection/subscriber tracking so
+    WS connection-cap tests can't leak counts into one another."""
+    notifier._ip_counts.clear()
+    notifier._subscribers.clear()
+    yield
+    notifier._ip_counts.clear()
+    notifier._subscribers.clear()
 
 
 _TABLES = ["media", "messages", "mailboxes"]

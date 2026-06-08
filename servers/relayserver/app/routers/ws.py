@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
 
 _CLOSE_AUTH_FAILED = 1008  # policy violation
+_CLOSE_CONN_LIMIT = 1008  # policy violation — connection cap reached
 _CLOSE_INTERNAL = 1011
 
 
@@ -50,67 +51,85 @@ async def mailbox_ws(
 ) -> None:
     await websocket.accept()
 
-    # 1. Auth handshake — single text frame, deadline-bounded.
+    # Per-IP connection cap (spam/DoS hardening) — enforced right after accept,
+    # BEFORE auth, so one IP can't tie up unbounded sockets pre-authentication.
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    if not notifier.try_acquire_ip(client_ip):
+        await websocket.close(code=_CLOSE_CONN_LIMIT, reason="connection limit")
+        return
+
+    # Everything past the IP reservation must release it on every exit path.
     try:
-        first_frame = await asyncio.wait_for(
-            websocket.receive_text(),
-            timeout=settings.ws_auth_deadline_seconds,
-        )
-    except asyncio.TimeoutError:
-        await websocket.close(code=_CLOSE_AUTH_FAILED, reason="auth timeout")
-        return
-    except WebSocketDisconnect:
-        return
-
-    try:
-        message = json.loads(first_frame)
-        if message.get("type") != "auth":
-            raise ValueError("first frame must be type=auth")
-        token = message["token"]
-        if not isinstance(token, str):
-            raise ValueError("token must be a string")
-    except (json.JSONDecodeError, ValueError, KeyError):
-        await websocket.close(code=_CLOSE_AUTH_FAILED, reason="auth required")
-        return
-
-    if not await verify_mailbox_token(mailbox_id, token, session):
-        await websocket.close(code=_CLOSE_AUTH_FAILED, reason="auth required")
-        return
-
-    # 2. Steady state — bridge notifier events into this socket while
-    # concurrently reading client frames (acks).
-    async def _push(payload: dict) -> None:
-        # Raises on slow / closed sockets so the notifier can drop us.
-        await websocket.send_text(json.dumps(payload))
-
-    notifier.subscribe(mailbox_id, _push)
-    try:
-        while True:
-            try:
-                text = await websocket.receive_text()
-            except WebSocketDisconnect:
-                return
-
-            try:
-                event = json.loads(text)
-                event_type = event.get("type")
-                if event_type == "ack":
-                    seq = int(event["through_sequence"])
-                    await session.execute(
-                        delete(Message).where(
-                            Message.mailbox_id == mailbox_id,
-                            Message.sequence <= seq,
-                        )
-                    )
-                    await session.commit()
-                # Unknown types are ignored silently — forward compatibility.
-            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-                # Malformed client frames are ignored (no logging — ADR 016).
-                continue
-    except Exception:  # noqa: BLE001 — hard envelope around handler
+        # 1. Auth handshake — single text frame, deadline-bounded.
         try:
-            await websocket.close(code=_CLOSE_INTERNAL)
-        except Exception:
-            pass
+            first_frame = await asyncio.wait_for(
+                websocket.receive_text(),
+                timeout=settings.ws_auth_deadline_seconds,
+            )
+        except asyncio.TimeoutError:
+            await websocket.close(code=_CLOSE_AUTH_FAILED, reason="auth timeout")
+            return
+        except WebSocketDisconnect:
+            return
+
+        try:
+            message = json.loads(first_frame)
+            if message.get("type") != "auth":
+                raise ValueError("first frame must be type=auth")
+            token = message["token"]
+            if not isinstance(token, str):
+                raise ValueError("token must be a string")
+        except (json.JSONDecodeError, ValueError, KeyError):
+            await websocket.close(code=_CLOSE_AUTH_FAILED, reason="auth required")
+            return
+
+        if not await verify_mailbox_token(mailbox_id, token, session):
+            await websocket.close(code=_CLOSE_AUTH_FAILED, reason="auth required")
+            return
+
+        # 2. Steady state — bridge notifier events into this socket while
+        # concurrently reading client frames (acks).
+        async def _push(payload: dict) -> None:
+            # Raises on slow / closed sockets so the notifier can drop us.
+            await websocket.send_text(json.dumps(payload))
+
+        # Per-mailbox subscriber cap (spam/DoS hardening). Refuse to register
+        # a (cap+1)-th live subscriber on this mailbox.
+        if not notifier.try_subscribe(mailbox_id, _push):
+            await websocket.close(
+                code=_CLOSE_CONN_LIMIT, reason="mailbox subscriber limit"
+            )
+            return
+
+        try:
+            while True:
+                try:
+                    text = await websocket.receive_text()
+                except WebSocketDisconnect:
+                    return
+
+                try:
+                    event = json.loads(text)
+                    event_type = event.get("type")
+                    if event_type == "ack":
+                        seq = int(event["through_sequence"])
+                        await session.execute(
+                            delete(Message).where(
+                                Message.mailbox_id == mailbox_id,
+                                Message.sequence <= seq,
+                            )
+                        )
+                        await session.commit()
+                    # Unknown types are ignored silently — forward compatibility.
+                except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                    # Malformed client frames are ignored (no logging — ADR 016).
+                    continue
+        except Exception:  # noqa: BLE001 — hard envelope around handler
+            try:
+                await websocket.close(code=_CLOSE_INTERNAL)
+            except Exception:
+                pass
+        finally:
+            notifier.unsubscribe(mailbox_id, _push)
     finally:
-        notifier.unsubscribe(mailbox_id, _push)
+        notifier.release_ip(client_ip)

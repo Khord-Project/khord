@@ -37,8 +37,15 @@ def mine_pow(mailbox_id: str, difficulty_bits: int) -> str:
 
 
 async def create_mailbox(client, *, mailbox_id: str | None = None,
-                         difficulty_bits: int = 8) -> tuple[str, str]:
-    """Mine PoW, POST /v1/mailboxes, return (mailbox_id, bearer_token)."""
+                         difficulty_bits: int | None = None) -> tuple[str, str]:
+    """Mine PoW, POST /v1/mailboxes, return (mailbox_id, bearer_token).
+
+    Mines at the server's configured difficulty by default so the helper keeps
+    working when the difficulty is changed in config.
+    """
+    if difficulty_bits is None:
+        from app.config import settings
+        difficulty_bits = settings.proof_of_work_difficulty_bits
     if mailbox_id is None:
         mailbox_id = random_mailbox_id()
     pow_nonce = mine_pow(mailbox_id, difficulty_bits)

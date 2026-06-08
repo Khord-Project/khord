@@ -12,8 +12,8 @@ import binascii
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select, update
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from app.crypto import sha256_hex
 from app.database import get_session
 from app.models import Mailbox, Message
 from app.notifier import notifier
+from app.ratelimit import limiter
 from app.schemas import (
     AcknowledgeRequest,
     CreateMailboxRequest,
@@ -51,7 +52,9 @@ def _encode_bearer_token(token_bytes: bytes) -> str:
     status_code=status.HTTP_201_CREATED,
     response_model=CreateMailboxResponse,
 )
+@limiter.limit(settings.rate_limit_create)
 async def create_mailbox(
+    request: Request,
     body: CreateMailboxRequest,
     session: AsyncSession = Depends(get_session),
 ) -> CreateMailboxResponse:
@@ -121,6 +124,15 @@ async def send_message(
             detail="invalid base64 blob",
         ) from e
 
+    # Per-message size cap (spam/DoS hardening). Images ride the media
+    # endpoint (capped separately), so a text blob has no reason to be large.
+    # Reject before touching the DB.
+    if len(blob_bytes) > settings.message_max_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="message too large",
+        )
+
     # Atomic: bump last_sequence and return the new value. Uses a row-level
     # lock; concurrent senders to the same mailbox serialize cleanly.
     seq_result = await session.execute(
@@ -138,8 +150,41 @@ async def send_message(
             status_code=status.HTTP_404_NOT_FOUND, detail="mailbox not found"
         )
 
+    # Opportunistic TTL cleanup for THIS mailbox only, BEFORE the backlog
+    # count so expired messages don't count against the cap. Bounded work per
+    # write, no scheduler required.
+    # TODO(storage-hardening): add a background sweeper for idle mailboxes;
+    # the opportunistic path here only fires on active ones.
+    now = _now()
+    await session.execute(
+        delete(Message).where(
+            Message.mailbox_id == mailbox_id,
+            Message.expires_at < now,
+        )
+    )
+
+    # Per-mailbox backlog cap (spam/DoS hardening): refuse to grow an
+    # already-full mailbox so one sender can't fill the relay's storage
+    # targeting a single mailbox. Counts live (unexpired) messages within
+    # this transaction, after the cleanup above. Rolling back undoes the
+    # sequence bump so a rejected send leaves no committed side effect.
+    live_count = (
+        await session.execute(
+            select(func.count(Message.id)).where(
+                Message.mailbox_id == mailbox_id,
+                Message.expires_at > now,
+            )
+        )
+    ).scalar_one()
+    if live_count >= settings.mailbox_max_messages:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="mailbox full",
+        )
+
     sequence = int(seq_row.last_sequence)
-    expires_at = _now() + timedelta(seconds=settings.message_ttl_seconds)
+    expires_at = now + timedelta(seconds=settings.message_ttl_seconds)
 
     session.add(
         Message(
@@ -147,17 +192,6 @@ async def send_message(
             sequence=sequence,
             blob=blob_bytes,
             expires_at=expires_at,
-        )
-    )
-
-    # Opportunistic TTL cleanup for THIS mailbox only. Bounded work per
-    # write, no scheduler required.
-    # TODO(storage-hardening): add a background sweeper for idle mailboxes;
-    # the opportunistic path here only fires on active ones.
-    await session.execute(
-        delete(Message).where(
-            Message.mailbox_id == mailbox_id,
-            Message.expires_at < _now(),
         )
     )
 

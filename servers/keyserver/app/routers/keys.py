@@ -17,14 +17,16 @@ return two different one-time pre-keys (or one returns none).
 import base64
 import binascii
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.crypto import fingerprint_of
 from app.database import get_session
 from app.dependencies import require_session_token
 from app.models import IdentityKey, OneTimePreKey
+from app.ratelimit import fingerprint_key, limiter
 from app.schemas import (
     BundleFetchResponse,
     BundleUploadRequest,
@@ -128,7 +130,14 @@ async def upload_pre_key_bundle(
     # PROTOCOL.md §4.2: when no OPK remains, the field is omitted (not null).
     response_model_exclude_none=True,
 )
+# Two stacked limits guard the OPK pool (ADR 012): per-fingerprint stops one
+# victim's one-time prekeys being drained (which silently degrades forward
+# secrecy for new conversations), per-IP stops one caller sweeping many
+# victims. Both must pass; the stricter one trips first.
+@limiter.limit(settings.rate_limit_opk_per_fingerprint, key_func=fingerprint_key)
+@limiter.limit(settings.rate_limit_opk_per_ip)
 async def fetch_pre_key_bundle(
+    request: Request,
     fingerprint: str,
     session: AsyncSession = Depends(get_session),
 ) -> BundleFetchResponse:
